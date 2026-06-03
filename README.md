@@ -107,13 +107,15 @@ Samples your latent and decodes it to an image in one node — no separate VAE D
 
 ---
 
-### 🐸 Save: A1111
+### 🐸 Save: Hash Embed (Recommended & Tested)
 
-Saves images with an A1111-compatible metadata block embedded in the file. The node reads your workflow automatically to extract the prompt, seed, steps, CFG, sampler, scheduler, model name, and any LoRAs — no manual wiring of those values required.
+Saves images with an A1111-compatible metadata block embedded in the file. The node reads your workflow automatically to extract the prompt, seed, steps, CFG, sampler, scheduler, model name, and any LoRAs — no manual wiring of those values required. Also computes SHA256 hashes for the model and all detected LoRAs and embeds them in the metadata. Fully compatible with Civitai's hash-based model recognition.
 
 Supports **PNG**, **JPG**, and **WEBP** output. Accepts a custom output path and date tokens in the filename prefix (e.g. `%date:yyyy-MM-dd%`).
 
-No SHA256 hashing — saves are fast with minimal CPU overhead. Use **🐸 Save: Hash Embed** if you want hashes for Civitai recognition.
+Hashes are cached on disk after the first compute, so subsequent saves of the same file are instant.
+
+**Extra option:** `append_counter` — disable this to overwrite the same file each run instead of creating numbered copies. Useful when iterating on a single result.
 
 | Optional Input | Description |
 |----------------|-------------|
@@ -124,13 +126,9 @@ No SHA256 hashing — saves are fast with minimal CPU overhead. Use **🐸 Save:
 
 ---
 
-### 🐸 Save: Hash Embed
+### 🐸 Save: A1111
 
-Identical to **🐸 Save: A1111** but also computes SHA256 hashes for the model and all detected LoRAs and embeds them in the metadata. Fully compatible with Civitai's hash-based model recognition.
-
-Hashes are cached on disk after the first compute, so subsequent saves of the same file are instant.
-
-**Extra option:** `append_counter` — disable this to overwrite the same file each run instead of creating numbered copies. Useful when iterating on a single result.
+Identical to **🐸 Save: Hash Embed** but without SHA256 hashing — saves are fast with minimal CPU overhead. Use **🐸 Save: Hash Embed** if you want hashes for Civitai recognition.
 
 ---
 
