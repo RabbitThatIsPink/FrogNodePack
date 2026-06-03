@@ -21,6 +21,10 @@ Made by [RabbitThatIsPink](https://github.com/RabbitThatIsPink)
 
 ---
 
+> **Workflow Note:** The included baseline workflow is configured for use with the [Anima Turbo LoRA](https://civitai.com/models/2560840/anima-turbo-lora). It includes a LoRA Loader node and a KSampler tuned to its recommended settings. You will need to download that LoRA separately before the workflow runs as intended.
+
+---
+
 ## Installation
 
 1. Copy the `FrogNodePack` folder into your ComfyUI `custom_nodes` directory.
