@@ -31,6 +31,16 @@ Made by [RabbitThatIsPink](https://github.com/RabbitThatIsPink)
 
 ---
 
+## Example Workflow
+
+A ready-to-use baseline workflow is included in this repo: [`FrogFlow - Export Edition.json`](FrogFlow%20-%20Export%20Edition.json)
+
+Load it in ComfyUI via **Load** → select the `.json` file. It demonstrates the standard node layout using the full Frog Node Pack — loader, CLIP encode, sampler, and save all wired together.
+
+![Frog Workflow](Frog_Workflow.png)
+
+---
+
 ## Nodes
 
 ---
