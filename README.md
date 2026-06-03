@@ -153,7 +153,7 @@ Joins up to 10 string inputs into one, separated by a configurable separator (de
 
 ### 🐸 Sorter
 
-Takes a comma-separated tag string and reorders it into the category order that Danbooru-trained models tend to respond best to:
+Takes a comma-separated tag string and reorders it into the category order that Anima-trained models tend to respond best to:
 
 > **Quality → Subject → Character → Series → Artist / Style → General**
 
@@ -181,6 +181,8 @@ Merges a base prompt string with up to four optional inputs, each gated by a tog
 | Florence2 | Included when the *florence2* toggle is on |
 | Scene | Included when the *scene* toggle is on |
 | toggle_pack | ANIMA_TOGGLES wire from 🐸 Toggle Pack |
+
+> **Note:** Tagger, Raffle, Florence2 and Scenes are not included.
 
 ---
 
