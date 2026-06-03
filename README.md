@@ -17,6 +17,10 @@ Made by [RabbitThatIsPink](https://github.com/RabbitThatIsPink)
 
 ---
 
+![Frog Pack Banner](banner.png)
+
+---
+
 ## Installation
 
 1. Copy the `FrogNodePack` folder into your ComfyUI `custom_nodes` directory.
