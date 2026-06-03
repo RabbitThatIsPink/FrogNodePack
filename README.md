@@ -78,7 +78,7 @@ Encodes both your positive and negative prompts in one node. Wire a CLIP in, typ
 
 ### 🐸 Empty Latent
 
-A resolution picker with presets sized for Anima, Flux, and similar high-resolution models. All presets operate at ~2 megapixels, which exceeds the 1MP ceiling of SDXL-based models — these are intended for models that can handle the higher resolution. Choose from the dropdown and get a latent tensor ready to go, plus the width and height as integers — handy for wiring into conditioning nodes that need size information.
+A resolution picker with presets sized for Anima, Flux, and similar models. Choose from the dropdown and get a latent tensor ready to go, plus the width and height as integers — handy for wiring into conditioning nodes that need size information.
 
 **Available presets:** 1536×1536 · 1728×1344 · 1344×1728 · 1856×1248 · 1248×1856 · 2016×1152 · 1152×2016 · 2304×1024 · 1024×2304
 
