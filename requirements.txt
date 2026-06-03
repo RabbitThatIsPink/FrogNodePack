@@ -1,0 +1,2 @@
+# No additional dependencies required.
+# Pillow (PIL) is the only library used and ships with ComfyUI.
