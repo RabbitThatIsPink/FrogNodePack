@@ -665,6 +665,24 @@ def build_a1111_parameters(
 # Shared save logic
 # ---------------------------------------------------------------------------
 
+def _get_next_counter(output_dir: str, base: str) -> int:
+    """Scan output_dir for any file matching base_NNNNN_* (any extension)
+    and return the next counter value.  Ignores extension so JPG/WEBP runs
+    increment the same counter as PNG runs."""
+    pat = re.compile(r'^' + re.escape(base) + r'_(\d+)_')
+    max_ctr = -1
+    try:
+        for fname in os.listdir(output_dir):
+            m = pat.match(fname)
+            if m:
+                val = int(m.group(1))
+                if val > max_ctr:
+                    max_ctr = val
+    except (FileNotFoundError, OSError):
+        pass
+    return max_ctr + 1
+
+
 def _resolve_output_dir(filename_prefix: str, output_path: str, images):
     default_output = folder_paths.get_output_directory() if folder_paths else "output"
     custom = (output_path or "").strip()
@@ -678,22 +696,15 @@ def _resolve_output_dir(filename_prefix: str, output_path: str, images):
         output_dir = default_output
 
     if folder_paths is not None and not custom:
-        full_prefix, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+        full_prefix, filename, _ctr, subfolder, _ = folder_paths.get_save_image_path(
             filename_prefix, output_dir, images.shape[2], images.shape[1]
         )
+        # Re-scan with all extensions so JPG/WEBP counters increment correctly
+        # (ComfyUI's built-in only looks at .png files)
+        counter = _get_next_counter(full_prefix, filename)
     else:
         base = os.path.basename(filename_prefix) or "image"
-        existing = []
-        try:
-            for f in os.listdir(output_dir):
-                if f.startswith(base + "_") and f.endswith(".png"):
-                    try:
-                        existing.append(int(f[len(base) + 1:].split("_")[0]))
-                    except ValueError:
-                        pass
-        except FileNotFoundError:
-            pass
-        counter = (max(existing) + 1) if existing else 0
+        counter = _get_next_counter(output_dir, base)
         full_prefix, filename, subfolder = output_dir, base, ""
 
     return full_prefix, filename, counter, subfolder, custom
