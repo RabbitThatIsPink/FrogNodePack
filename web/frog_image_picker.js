@@ -2,8 +2,8 @@
  * 🐸 Image Picker — DOM widget
  *
  * Captures a KSampler batch on Run 1, shows thumbnails for selection,
- * then on Proceed queues Run 2 which passes only the chosen frames
- * to the downstream Save node.
+ * then on Proceed queues a MINIMAL prompt (Picker + downstream only —
+ * no KSampler re-run) that passes only the chosen frames to Save.
  */
 
 import { app } from "../../scripts/app.js";
@@ -30,6 +30,7 @@ const _CSS = `
   gap: 6px;
   align-items: center;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .fip-btn {
   padding: 5px 12px;
@@ -45,28 +46,25 @@ const _CSS = `
   opacity: 0.35;
   cursor: not-allowed;
 }
-.fip-proceed { background: #3d8f5c; color: #fff; }
+.fip-proceed     { background: #3d8f5c; color: #fff; }
 .fip-proceed:not(:disabled):hover { background: #4daf72; }
-.fip-cancel  { background: #7d3333; color: #fff; }
+.fip-cancel      { background: #7d3333; color: #fff; }
 .fip-cancel:not(:disabled):hover  { background: #9d4444; }
-
-.fip-select-all {
-  background: #2d5a8a;
-  color: #fff;
-}
+.fip-select-all  { background: #2d5a8a; color: #fff; }
 .fip-select-all:not(:disabled):hover { background: #3a72af; }
 
+/* ── status bar — sits below the buttons ── */
 .fip-status {
-  margin-left: auto;
-  color: #888;
   font-size: 11px;
-  white-space: nowrap;
+  color: #888;
+  flex-shrink: 0;
+  padding: 2px 0;
 }
 
 /* ── grid ── */
 .fip-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--fip-thumb-size, 130px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 6px;
   overflow-y: auto;
   flex: 1;
@@ -93,6 +91,7 @@ const _CSS = `
   height: 100%;
   object-fit: cover;
   display: block;
+  pointer-events: none;
 }
 
 /* number badge */
@@ -145,19 +144,80 @@ function _injectCSS() {
   document.head.appendChild(s);
 }
 
+// ─── Graph helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Return the set of node IDs that are downstream (reachable via outputs)
+ * from startId in the given ComfyUI prompt object.
+ */
+function getDownstreamIds(prompt, startId) {
+  // Build forward-adjacency: srcId -> [consumerIds]
+  const fwd = {};
+  for (const [id, node] of Object.entries(prompt)) {
+    for (const val of Object.values(node.inputs ?? {})) {
+      if (Array.isArray(val) && val.length === 2) {
+        const src = String(val[0]);
+        (fwd[src] ??= []).push(id);
+      }
+    }
+  }
+  // BFS
+  const result = new Set();
+  const queue  = [startId];
+  while (queue.length) {
+    for (const dep of (fwd[queue.shift()] ?? [])) {
+      if (!result.has(dep)) { result.add(dep); queue.push(dep); }
+    }
+  }
+  return result;
+}
+
+/**
+ * Build a minimal prompt containing only the Picker node + its downstream
+ * dependents.  Connections that reference nodes NOT in the minimal set are
+ * removed so ComfyUI doesn't complain about missing upstream nodes.
+ * The Picker's own "images" input is stripped (it reads from disk).
+ */
+async function buildMinimalPrompt(pickerNodeId) {
+  const { output: fullPrompt, workflow } = await app.graphToPrompt();
+  const keep = new Set([pickerNodeId, ...getDownstreamIds(fullPrompt, pickerNodeId)]);
+
+  const minimal = {};
+  for (const [id, node] of Object.entries(fullPrompt)) {
+    if (!keep.has(id)) continue;
+    const copy = JSON.parse(JSON.stringify(node));
+
+    // Strip the Picker's upstream IMAGE input (it uses stored disk frames).
+    if (id === pickerNodeId) {
+      delete copy.inputs?.images;
+    }
+
+    // Remove any remaining input connections that point outside the minimal set.
+    for (const [k, v] of Object.entries(copy.inputs ?? {})) {
+      if (Array.isArray(v) && v.length === 2 && !keep.has(String(v[0]))) {
+        delete copy.inputs[k];
+      }
+    }
+
+    minimal[id] = copy;
+  }
+  return { minimal, workflow };
+}
+
 // ─── Widget builder ──────────────────────────────────────────────────────────
 
 function buildPickerWidget(node) {
   _injectCSS();
 
-  // ── DOM skeleton ──
+  // ── DOM skeleton ──────────────────────────────────────────────────────────
   const wrap = document.createElement("div");
   wrap.className = "fip-wrap";
 
+  // Buttons row
   const toolbar = document.createElement("div");
   toolbar.className = "fip-toolbar";
 
-  const proceedBtn  = document.createElement("button");
+  const proceedBtn = document.createElement("button");
   proceedBtn.className = "fip-btn fip-proceed";
   proceedBtn.textContent = "▶  Proceed";
   proceedBtn.disabled = true;
@@ -172,38 +232,39 @@ function buildPickerWidget(node) {
   selectAllBtn.textContent = "Select All";
   selectAllBtn.disabled = true;
 
-  const status = document.createElement("span");
+  toolbar.append(proceedBtn, cancelBtn, selectAllBtn);
+
+  // Status line — below the buttons
+  const status = document.createElement("div");
   status.className = "fip-status";
-  status.textContent = "Run the workflow to generate images";
+  status.textContent = "Run the workflow to generate images.";
 
-  toolbar.append(proceedBtn, cancelBtn, selectAllBtn, status);
-
+  // Thumbnail grid
   const grid = document.createElement("div");
   grid.className = "fip-grid";
 
-  // Initial empty state
   const emptyMsg = document.createElement("div");
   emptyMsg.className = "fip-empty";
   emptyMsg.innerHTML = "<strong>No images yet</strong>Queue a workflow with this node to capture a batch.";
   grid.appendChild(emptyMsg);
 
-  wrap.append(toolbar, grid);
+  wrap.append(toolbar, status, grid);
 
-  // ── State ──
+  // ── State ─────────────────────────────────────────────────────────────────
   const selectedIndices = new Set();
   let totalCount = 0;
 
-  // ── Helpers ──
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const updateStatus = () => {
     if (totalCount === 0) {
-      status.textContent = "Run the workflow to generate images";
-      proceedBtn.disabled  = true;
-      cancelBtn.disabled   = true;
+      status.textContent = "Run the workflow to generate images.";
+      proceedBtn.disabled   = true;
+      cancelBtn.disabled    = true;
       selectAllBtn.disabled = true;
     } else {
       status.textContent = `${selectedIndices.size} / ${totalCount} selected`;
-      proceedBtn.disabled  = selectedIndices.size === 0;
-      cancelBtn.disabled   = false;
+      proceedBtn.disabled   = selectedIndices.size === 0;
+      cancelBtn.disabled    = false;
       selectAllBtn.disabled = false;
       selectAllBtn.textContent =
         selectedIndices.size === totalCount ? "Deselect All" : "Select All";
@@ -218,8 +279,7 @@ function buildPickerWidget(node) {
   };
 
   const populateThumbnails = (images) => {
-    if (!images || images.length === 0) return;
-
+    if (!images?.length) return;
     grid.replaceChildren();
     selectedIndices.clear();
     totalCount = images.length;
@@ -229,25 +289,23 @@ function buildPickerWidget(node) {
       tile.className = "fip-tile";
 
       const imgEl = document.createElement("img");
-      const url   = api.apiURL(
+      imgEl.src = api.apiURL(
         `/view?filename=${encodeURIComponent(img.filename)}` +
         `&subfolder=${encodeURIComponent(img.subfolder)}` +
         `&type=${encodeURIComponent(img.type)}`
       );
-      imgEl.src = url;
-      imgEl.alt = `Frame ${idx + 1}`;
+      imgEl.alt     = `Frame ${idx + 1}`;
       imgEl.draggable = false;
 
-      const numBadge = document.createElement("div");
-      numBadge.className = "fip-tile-num";
-      numBadge.textContent = `#${idx + 1}`;
+      const num = document.createElement("div");
+      num.className   = "fip-tile-num";
+      num.textContent = `#${idx + 1}`;
 
       const tick = document.createElement("div");
-      tick.className = "fip-tile-tick";
+      tick.className   = "fip-tile-tick";
       tick.textContent = "✓";
 
-      tile.append(imgEl, numBadge, tick);
-
+      tile.append(imgEl, num, tick);
       tile.addEventListener("click", () => {
         if (selectedIndices.has(idx)) {
           selectedIndices.delete(idx);
@@ -265,65 +323,67 @@ function buildPickerWidget(node) {
     updateStatus();
   };
 
-  // ── Select All / Deselect All ──
+  // ── Select All / Deselect All ─────────────────────────────────────────────
   selectAllBtn.addEventListener("click", () => {
     const tiles = [...grid.querySelectorAll(".fip-tile")];
     if (selectedIndices.size === totalCount) {
-      // Deselect all
       selectedIndices.clear();
       tiles.forEach(t => t.classList.remove("fip-selected"));
     } else {
-      // Select all
-      tiles.forEach((t, i) => {
-        selectedIndices.add(i);
-        t.classList.add("fip-selected");
-      });
+      tiles.forEach((t, i) => { selectedIndices.add(i); t.classList.add("fip-selected"); });
     }
     updateStatus();
   });
 
-  // ── Proceed ──
+  // ── Proceed ───────────────────────────────────────────────────────────────
   proceedBtn.addEventListener("click", async () => {
     if (selectedIndices.size === 0) return;
 
     const nodeId    = String(node.id);
     const selection = [...selectedIndices].sort((a, b) => a - b);
 
-    proceedBtn.disabled = true;
+    proceedBtn.disabled   = true;
     proceedBtn.textContent = "…";
-    status.textContent = "Queuing…";
+    status.textContent    = "Queuing…";
 
     try {
-      const resp = await fetch("/frog_picker/proceed", {
+      // 1. Tell the server which frames to output on the next run.
+      const setResp = await fetch("/frog_picker/proceed", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ node_id: nodeId, selection }),
       });
-      if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+      if (!setResp.ok) throw new Error(`/frog_picker/proceed → ${setResp.status}`);
 
-      // Queue one workflow run — the Picker node will output selected frames.
-      await app.queuePrompt(0, 1);
+      // 2. Build a minimal prompt (Picker + downstream only — no KSampler).
+      const { minimal, workflow } = await buildMinimalPrompt(nodeId);
 
-      // Reset UI immediately (optimistic)
+      // 3. Queue only that partial graph.
+      await api.queuePrompt(0, {
+        client_id:  api.clientId,
+        prompt:     minimal,
+        extra_data: { extra_pnginfo: { workflow } },
+      });
+
+      // Reset UI — the save will run in the background.
       resetUI();
       proceedBtn.textContent = "▶  Proceed";
 
     } catch (err) {
       console.error("[🐸 Image Picker] proceed failed:", err);
-      proceedBtn.disabled  = false;
+      proceedBtn.disabled   = false;
       proceedBtn.textContent = "▶  Proceed";
-      status.textContent = "⚠ Proceed failed — check console";
+      status.textContent    = "⚠ Proceed failed — check console";
     }
   });
 
-  // ── Cancel ──
+  // ── Cancel ────────────────────────────────────────────────────────────────
   cancelBtn.addEventListener("click", async () => {
-    const nodeId = String(node.id);
     try {
       await fetch("/frog_picker/cancel", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ node_id: nodeId }),
+        body:    JSON.stringify({ node_id: String(node.id) }),
       });
     } catch (err) {
       console.error("[🐸 Image Picker] cancel failed:", err);
@@ -331,26 +391,19 @@ function buildPickerWidget(node) {
     resetUI();
   });
 
-  // ── Listen for execution results ──
-  // ComfyUI fires an "executed" event when a node completes with UI output.
-  // We filter for this node's ID and populate thumbnails from the result.
-  const onExecuted = ({ detail }) => {
-    if (String(detail?.node) !== String(node.id)) return;
-
-    const images = detail?.output?.images;
-    // Images present → capture run completed, show thumbnails.
-    // Empty / absent → proceed run completed, UI already reset.
-    if (images && images.length > 0) {
-      populateThumbnails(images);
-    }
+  // ── Listen for captured batch (custom WS event) ───────────────────────────
+  // The Python node sends "frog_picker.captured" instead of returning
+  // ui.images — this prevents ComfyUI from rendering a duplicate image strip.
+  const onCaptured = ({ detail }) => {
+    if (String(detail?.node_id) !== String(node.id)) return;
+    populateThumbnails(detail.images);
   };
+  api.addEventListener("frog_picker.captured", onCaptured);
 
-  api.addEventListener("executed", onExecuted);
-
-  // Cleanup when node is removed from the graph
+  // Cleanup on node removal
   const origOnRemoved = node.onRemoved;
   node.onRemoved = function (...args) {
-    api.removeEventListener("executed", onExecuted);
+    api.removeEventListener("frog_picker.captured", onCaptured);
     return origOnRemoved?.apply(this, args);
   };
 
@@ -359,13 +412,11 @@ function buildPickerWidget(node) {
 
 // ─── Extension registration ──────────────────────────────────────────────────
 
-const PICKER_TYPE = "FrogImagePicker";
-
 app.registerExtension({
   name: "FrogNodePack.ImagePicker",
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (nodeData.name !== PICKER_TYPE) return;
+    if (nodeData.name !== "FrogImagePicker") return;
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {

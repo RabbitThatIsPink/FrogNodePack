@@ -118,7 +118,10 @@ class FrogImagePicker:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {
+            "required": {},
+            "optional": {
+                # Optional so Proceed can queue only the Picker + downstream
+                # nodes (no upstream KSampler) without a validation error.
                 "images": ("IMAGE",),
             },
             "hidden": {
@@ -134,33 +137,40 @@ class FrogImagePicker:
     FUNCTION      = "pick"
     CATEGORY      = "🐸 Node Pack"
 
-    def pick(self, images, unique_id=None, prompt=None, extra_pnginfo=None):
+    def pick(self, images=None, unique_id=None, prompt=None, extra_pnginfo=None):
         import torch
 
         node_id = str(unique_id or "0")
         state   = _picker_state.get(node_id, {})
 
         # ── Proceed run ──────────────────────────────────────────────────────
+        # Triggered by the JS Proceed button queueing a minimal prompt that
+        # contains only this node + downstream nodes (no KSampler upstream).
         if state.get("ready"):
             selection = state.get("selection") or []
             paths     = state.get("paths", [])
 
-            # Fall back: if user somehow cleared selection, pass every stored frame
             if not selection:
                 selection = list(range(len(paths)))
 
             output = _load_frames(paths, selection)
             if output is None:
-                # Nothing loaded (files missing?) — pass original batch through
-                output = images
+                # Files missing — fall back to whatever came in (shouldn't happen)
+                output = images if images is not None else torch.zeros(
+                    (0, 1, 1, 3), dtype=torch.float32
+                )
 
-            # Reset: ready for next generation
+            # Reset: ready for the next generation batch
             _picker_state[node_id] = {"ready": False, "paths": [], "selection": []}
-
             return {"ui": {"images": []}, "result": (output,)}
 
         # ── Capture run ──────────────────────────────────────────────────────
-        # Store every frame, return empty batch so downstream Save is skipped.
+        if images is None:
+            # No images and not in proceed mode — nothing to do yet
+            empty = torch.zeros((0, 1, 1, 3), dtype=torch.float32)
+            return {"ui": {"images": []}, "result": (empty,)}
+
+        # Store every frame to temp disk.
         paths, ui_images = _store_frames(images, node_id)
         _picker_state[node_id] = {
             "ready":     False,
@@ -168,9 +178,18 @@ class FrogImagePicker:
             "selection": [],
         }
 
-        # An empty (0-frame) IMAGE tells downstream Save nodes to do nothing.
+        # Notify the frontend via WebSocket so the DOM widget can populate
+        # thumbnails WITHOUT using ui.images — returning ui.images would make
+        # ComfyUI render a second (duplicate) image strip below the node.
+        if _server is not None:
+            _server.send_sync("frog_picker.captured", {
+                "node_id": node_id,
+                "images":  ui_images,
+            })
+
+        # Return empty batch — downstream Save skips gracefully.
         empty = torch.zeros((0, *images.shape[1:]), dtype=images.dtype)
-        return {"ui": {"images": ui_images}, "result": (empty,)}
+        return {"ui": {"images": []}, "result": (empty,)}
 
 
 # ---------------------------------------------------------------------------
