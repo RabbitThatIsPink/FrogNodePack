@@ -1,10 +1,14 @@
 """
-🐸 Image Picker
-Sits between KSampler and a Save node.  On the first queue run it captures
-the batch, stores frames to disk, and displays thumbnails in the node UI.
-The user clicks to select frames, then presses Proceed to queue a second
-run that outputs only those frames to the downstream Save node.
-Cancel discards the stored batch and resets the node.
+🐸 Image Picker — sits between KSampler and a Save node.
+
+Capture run : receives the image batch → stores frames → shows thumbnails
+              → interrupts execution (nothing downstream runs yet).
+
+Proceed run : /frog_picker/proceed builds a minimal prompt and posts it
+              to ComfyUI's own /prompt API endpoint (avoids direct queue
+              manipulation and works on all ComfyUI builds).
+
+Cancel      : clears stored frames and resets the node.
 """
 from __future__ import annotations
 
@@ -16,12 +20,14 @@ from pathlib import Path
 import numpy as np
 
 try:
+    import aiohttp as _aio
     from aiohttp import web
     from server import PromptServer
     _server = PromptServer.instance
 except Exception:
     _server = None
     web = None
+    _aio = None
 
 try:
     import folder_paths
@@ -36,130 +42,103 @@ except ImportError:
 ROOT = Path(__file__).parent
 
 # ---------------------------------------------------------------------------
-# Per-node state  (keyed by unique_id string)
+# Per-node runtime state  { node_id: {ready, paths, selection} }
 # ---------------------------------------------------------------------------
-# {
-#   "ready":     bool,       — True after Proceed is clicked
-#   "paths":     [str],      — temp PNG paths for the stored batch
-#   "selection": [int],      — frame indices chosen by the user
-# }
-_picker_state: dict[str, dict] = {}
+_state: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Temp-file helpers
 # ---------------------------------------------------------------------------
 
 def _temp_dir(node_id: str) -> Path:
-    if folder_paths is not None:
-        base = Path(folder_paths.get_temp_directory())
-    else:
-        base = ROOT / "data" / "tmp"
+    base = (
+        Path(folder_paths.get_temp_directory())
+        if folder_paths is not None
+        else ROOT / "data" / "tmp"
+    )
     d = base / "frog_picker" / str(node_id)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _store_frames(images, node_id: str) -> tuple[list[str], list[dict]]:
-    """
-    Save each frame as a temp PNG.
-    Returns (abs_paths, ui_image_dicts) where ui_image_dicts can be passed
-    directly to the ComfyUI "ui.images" response key.
-    """
+def _save_frames(images, node_id: str) -> tuple[list[str], list[dict]]:
+    """Write batch frames as temp PNGs; return (abs_paths, ui_dicts)."""
     if PilImage is None:
         return [], []
-
     d = _temp_dir(node_id)
     for old in d.glob("frame_*.png"):
         old.unlink(missing_ok=True)
-
-    paths: list[str] = []
-    ui_images: list[dict] = []
-
+    paths, ui = [], []
     for i, frame in enumerate(images):
-        arr = frame
-        if hasattr(arr, "cpu"):
-            arr = arr.cpu().numpy()
+        arr = frame.cpu().numpy() if hasattr(frame, "cpu") else frame
         arr = (arr.clip(0, 1) * 255).astype(np.uint8)
-        pil = PilImage.fromarray(arr)
         fname = f"frame_{i:04d}.png"
-        fpath = d / fname
-        pil.save(str(fpath), format="PNG")
-        paths.append(str(fpath))
-        ui_images.append({
+        PilImage.fromarray(arr).save(str(d / fname), format="PNG")
+        paths.append(str(d / fname))
+        ui.append({
             "filename": fname,
             "subfolder": f"frog_picker/{node_id}",
             "type": "temp",
         })
-
-    return paths, ui_images
+    return paths, ui
 
 
 def _load_frames(paths: list[str], indices: list[int]):
-    """Load selected frames from disk, return stacked tensor."""
+    """Load selected frames from disk; return stacked tensor or None."""
     import torch
     frames = []
     for idx in indices:
         if 0 <= idx < len(paths) and os.path.exists(paths[idx]):
-            arr = np.array(
-                PilImage.open(paths[idx]).convert("RGB"),
-                dtype=np.float32,
-            ) / 255.0
+            arr = (np.array(PilImage.open(paths[idx]).convert("RGB"), dtype=np.float32)
+                   / 255.0)
             frames.append(torch.from_numpy(arr).unsqueeze(0))
-    if not frames:
-        return None
-    return torch.cat(frames, dim=0)
+    return torch.cat(frames, dim=0) if frames else None
 
 
 # ---------------------------------------------------------------------------
 # Minimal-prompt builder
 # ---------------------------------------------------------------------------
 
-def _build_minimal_prompt(full_prompt: dict, picker_node_id: str) -> dict:
+def _build_minimal_prompt(full_prompt: dict, picker_id: str) -> dict:
     """
-    Return a copy of full_prompt that contains only the Picker node and its
-    downstream dependents, with the Picker's `images` input removed so
-    KSampler (and everything upstream) is never executed.
-
-    Any remaining input connections that point outside the kept set are also
-    stripped so ComfyUI doesn't complain about missing upstream nodes.
+    Return only the Picker + its downstream dependents from full_prompt.
+    The Picker's 'images' input is stripped so nothing upstream (KSampler)
+    is needed.  Dangling cross-set connections are also removed.
     """
-    pid = str(picker_node_id)
+    pid = str(picker_id)
 
-    # Build forward-adjacency: src_id -> [consumer_ids]
+    # Forward adjacency map: source_node_id → [consumer_node_ids]
     fwd: dict[str, list[str]] = {}
     for nid, node in full_prompt.items():
         for val in (node.get("inputs") or {}).values():
             if isinstance(val, list) and len(val) == 2:
-                src = str(val[0])
-                fwd.setdefault(src, []).append(str(nid))
+                fwd.setdefault(str(val[0]), []).append(str(nid))
 
-    # BFS from Picker to find all downstream nodes
+    # BFS from Picker to collect downstream nodes
     downstream: set[str] = set()
     q = [pid]
     while q:
-        curr = q.pop(0)
-        for dep in fwd.get(curr, []):
+        for dep in fwd.get(q.pop(0), []):
             if dep not in downstream:
                 downstream.add(dep)
                 q.append(dep)
 
     keep = {pid} | downstream
-
     minimal: dict = {}
     for nid, node in full_prompt.items():
         nid = str(nid)
         if nid not in keep:
             continue
         nc = copy.deepcopy(node)
+        # Strip the upstream image connection from the Picker node
         if nid == pid:
             (nc.get("inputs") or {}).pop("images", None)
-        # Remove any input connections pointing outside the kept set
+        # Remove any remaining links to nodes we're not keeping
         for k, v in list((nc.get("inputs") or {}).items()):
             if isinstance(v, list) and len(v) == 2 and str(v[0]) not in keep:
                 del nc["inputs"][k]
         minimal[nid] = nc
-
     return minimal
 
 
@@ -174,20 +153,19 @@ class FrogImagePicker:
         return {
             "required": {},
             "optional": {
-                # Optional so Proceed can queue only the Picker + downstream
-                # nodes (no upstream KSampler) without a validation error.
+                # Not provided on the Proceed run — Picker reads disk frames.
                 "images": ("IMAGE",),
             },
             "hidden": {
-                "unique_id":    "UNIQUE_ID",
-                "prompt":       "PROMPT",
+                "unique_id":     "UNIQUE_ID",
+                "prompt":        "PROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
 
     RETURN_TYPES  = ("IMAGE",)
     RETURN_NAMES  = ("selected",)
-    OUTPUT_NODE   = True          # always execute (side-effects: store / emit)
+    OUTPUT_NODE   = True
     FUNCTION      = "pick"
     CATEGORY      = "🐸 Node Pack"
 
@@ -195,145 +173,111 @@ class FrogImagePicker:
         import torch
 
         node_id = str(unique_id or "0")
-        state   = _picker_state.get(node_id, {})
+        st      = _state.get(node_id, {})
 
         # ── Proceed run ──────────────────────────────────────────────────────
-        # Triggered by the JS Proceed button queueing a minimal prompt that
-        # contains only this node + downstream nodes (no KSampler upstream).
-        if state.get("ready"):
-            selection = state.get("selection") or []
-            paths     = state.get("paths", [])
-
-            if not selection:
-                selection = list(range(len(paths)))
-
-            output = _load_frames(paths, selection)
+        if st.get("ready"):
+            paths     = st.get("paths", [])
+            selection = st.get("selection") or list(range(len(paths)))
+            output    = _load_frames(paths, selection)
             if output is None:
-                # Files missing — fall back to whatever came in (shouldn't happen)
-                output = images if images is not None else torch.zeros(
-                    (0, 1, 1, 3), dtype=torch.float32
-                )
-
-            # Reset: ready for the next generation batch
-            _picker_state[node_id] = {"ready": False, "paths": [], "selection": []}
+                output = torch.zeros((0, 1, 1, 3), dtype=torch.float32)
+            _state[node_id] = {"ready": False, "paths": [], "selection": []}
             return {"ui": {"images": []}, "result": (output,)}
 
         # ── Capture run ──────────────────────────────────────────────────────
         if images is None:
-            # No images and not in proceed mode — nothing to do yet
             empty = torch.zeros((0, 1, 1, 3), dtype=torch.float32)
             return {"ui": {"images": []}, "result": (empty,)}
 
-        # Store every frame to temp disk.
-        paths, ui_images = _store_frames(images, node_id)
-        _picker_state[node_id] = {
-            "ready":     False,
-            "paths":     paths,
-            "selection": [],
-        }
+        paths, ui_images = _save_frames(images, node_id)
+        _state[node_id]  = {"ready": False, "paths": paths, "selection": []}
 
-        # Notify the frontend via WebSocket so the DOM widget can populate
-        # thumbnails WITHOUT using ui.images — returning ui.images would make
-        # ComfyUI render a second (duplicate) image strip below the node.
+        # Notify the DOM widget via WebSocket (avoids duplicate image strip)
         if _server is not None:
-            _server.send_sync("frog_picker.captured", {
-                "node_id": node_id,
-                "images":  ui_images,
-            })
+            _server.send_sync("frog_picker.captured",
+                              {"node_id": node_id, "images": ui_images})
 
-        # Stop execution here so no downstream node (Save, Preview, etc.)
-        # runs on the capture pass.  An empty tensor would crash ComfyUI's
-        # built-in SaveImage/PreviewImage nodes; an interrupt is cleaner.
-        try:
-            import comfy.model_management as _mm
-            raise _mm.InterruptProcessingException()
-        except ImportError:
-            # Fallback for unusual environments — return a 0-frame tensor and
-            # hope the downstream node handles it (our custom Save nodes do).
-            empty = torch.zeros((0, *images.shape[1:]), dtype=images.dtype)
-            return {"ui": {"images": []}, "result": (empty,)}
+        # Interrupt so nothing downstream runs on the capture pass.
+        import comfy.model_management as _mm
+        raise _mm.InterruptProcessingException()
 
 
 # ---------------------------------------------------------------------------
-# Node registration
+# Registration
 # ---------------------------------------------------------------------------
 
-NODE_CLASS_MAPPINGS = {
-    "FrogImagePicker": FrogImagePicker,
-}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "FrogImagePicker": "🐸 Image Picker",
-}
+NODE_CLASS_MAPPINGS        = {"FrogImagePicker": FrogImagePicker}
+NODE_DISPLAY_NAME_MAPPINGS = {"FrogImagePicker": "🐸 Image Picker"}
 
 
 # ---------------------------------------------------------------------------
 # HTTP routes
 # ---------------------------------------------------------------------------
 
-if _server is not None and web is not None:
-    routes = _server.routes
+if _server is not None and web is not None and _aio is not None:
+    _r = _server.routes
 
-    @routes.post("/frog_picker/proceed")
-    async def _picker_proceed(request: web.Request) -> web.Response:
+    @_r.post("/frog_picker/proceed")
+    async def _proceed(req: web.Request) -> web.Response:
         try:
-            data = await request.json()
+            data = await req.json()
         except Exception:
             return web.json_response({"ok": False, "error": "bad JSON"}, status=400)
 
-        node_id     = str(data.get("node_id", ""))
-        selection   = data.get("selection", [])
+        node_id     = str(data.get("node_id") or "")
+        selection   = [int(i) for i in (data.get("selection") or [])
+                       if str(i).lstrip("-").isdigit()]
         full_prompt = data.get("prompt") or {}
         client_id   = str(data.get("client_id") or "")
 
         if not node_id:
             return web.json_response({"ok": False, "error": "missing node_id"}, status=400)
 
-        # Mark this node as ready to output its stored selection.
-        state = _picker_state.get(node_id, {})
-        state["selection"] = [int(i) for i in selection if str(i).strip().lstrip("-").isdigit()]
-        state["ready"]     = True
-        _picker_state[node_id] = state
+        # Mark node as ready so the Proceed run returns the selected frames.
+        st = _state.get(node_id, {})
+        st["selection"] = selection
+        st["ready"]     = True
+        _state[node_id] = st
 
-        # Build a minimal prompt (Picker + downstream only) so KSampler and
-        # everything upstream is skipped on this queue run.
         queued = False
-        if full_prompt and _server is not None:
+        if full_prompt:
             try:
-                minimal   = _build_minimal_prompt(full_prompt, node_id)
-                prompt_id = str(uuid.uuid4())
-                extra     = {"client_id": client_id} if client_id else {}
-
-                # ComfyUI Desktop's prompt_worker reads item[5] as a
-                # 'sensitive' boolean — use a 6-element tuple so it doesn't
-                # crash the worker thread.  Standard ComfyUI only reads up to
-                # item[4] so the extra element is silently ignored there.
-                _server.prompt_queue.put((0, prompt_id, minimal, extra, None, False))
-                queued = True
+                minimal = _build_minimal_prompt(full_prompt, node_id)
+                # Route through ComfyUI's own /prompt endpoint — it handles all
+                # internal queue formats correctly across standard + Desktop builds.
+                port    = req.url.port or 8188
+                payload = {"prompt": minimal, "client_id": client_id}
+                async with _aio.ClientSession() as session:
+                    async with session.post(
+                        f"http://127.0.0.1:{port}/prompt", json=payload
+                    ) as r:
+                        if r.status == 200:
+                            queued = True
+                        else:
+                            text = await r.text()
+                            print(f"[🐸 Image Picker] /prompt returned {r.status}: {text}")
             except Exception as e:
-                print(f"[🐸 Image Picker] queue.put failed ({e}); JS will fall back to app.queuePrompt")
+                print(f"[🐸 Image Picker] proceed error: {e}")
 
-        # queued=False tells the JS to fall back to app.queuePrompt(0,1) so
-        # images are still saved (KSampler re-runs, but Picker uses stored frames).
         return web.json_response({"ok": True, "queued": queued})
 
-    @routes.post("/frog_picker/cancel")
-    async def _picker_cancel(request: web.Request) -> web.Response:
+    @_r.post("/frog_picker/cancel")
+    async def _cancel(req: web.Request) -> web.Response:
         try:
-            data = await request.json()
+            data = await req.json()
         except Exception:
             return web.json_response({"ok": False, "error": "bad JSON"}, status=400)
 
-        node_id = str(data.get("node_id", ""))
+        node_id = str(data.get("node_id") or "")
         if node_id:
-            state = _picker_state.get(node_id, {})
-            # Delete temp files
-            for p in state.get("paths", []):
+            for p in _state.get(node_id, {}).get("paths", []):
                 try:
                     Path(p).unlink(missing_ok=True)
                 except Exception:
                     pass
-            _picker_state[node_id] = {"ready": False, "paths": [], "selection": []}
+            _state[node_id] = {"ready": False, "paths": [], "selection": []}
 
         return web.json_response({"ok": True})
 
-    print("[🐸 Image Picker] HTTP routes registered at /frog_picker/*")
+    print("[🐸 Image Picker] routes registered at /frog_picker/*")

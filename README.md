@@ -136,6 +136,25 @@ Samples your latent and decodes it to an image in one node — no separate VAE D
 
 ---
 
+### 🐸 Image Picker
+
+Sits between the KSampler and a Save node. Instead of saving everything the sampler generates, run the batch first, review the results as thumbnails directly on the canvas, select what you want, then click **Proceed** — only the selected frames continue down the line.
+
+**Workflow:**
+1. Wire `KSampler → Image → 🐸 Image Picker → Image → Save`
+2. Queue the workflow — the sampler runs and thumbnails appear in the node
+3. Click any tiles to select them (click again to deselect; **Select All** / **Deselect All** available)
+4. Click **▶ Proceed** — only the selected images are passed to the Save node
+5. Click **✕ Cancel** to discard the batch and start fresh
+
+The KSampler does **not** re-run on Proceed — only the Picker and everything downstream executes, so you pay for generation once.
+
+| Output | Type | Description |
+|--------|------|-------------|
+| selected | IMAGE | The selected frames as a batched image tensor |
+
+---
+
 ### 🐸 Save: Hash Embed (Recommended & Tested)
 
 Saves images with an A1111-compatible metadata block embedded in the file. The node reads your workflow automatically to extract the prompt, seed, steps, CFG, sampler, scheduler, model name, and any LoRAs — no manual wiring of those values required. Also computes SHA256 hashes for the model and all detected LoRAs and embeds them in the metadata. Fully compatible with Civitai's hash-based model recognition.
