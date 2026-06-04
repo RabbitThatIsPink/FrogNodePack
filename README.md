@@ -53,6 +53,21 @@ Load it in ComfyUI via **Load** → select the `.json` file. It demonstrates the
 
 ---
 
+### Autocomplete Optimization Patch *(optional — requires ComfyUI-Custom-Scripts)*
+
+Speeds up the [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts) autocomplete for large tag lists. The patch pre-caches the lowercased word list at load time and debounces the search trigger, eliminating repeated string allocations on every keystroke.
+
+**How to install:**
+
+1. Make sure [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts) is installed in your `custom_nodes` folder.
+2. Navigate to `FrogNodePack/Autocomplete Optimization Patch - Custom Scripts/`.
+3. Double-click **`Apply Patch.bat`** and follow the on-screen output.
+4. Hard-refresh your browser (`Ctrl+Shift+R`).
+
+If Custom-Scripts is not installed the script exits cleanly with no changes made. A `.bak` backup of the original file is created before any edits are written. If Custom-Scripts updates and wipes the patch, simply re-run the bat to reapply.
+
+---
+
 ### 🐸 Load: Model + CLIP + VAE
 
 Replaces three separate loader nodes with one. Pick your diffusion model, text encoder, and VAE from their respective dropdowns and get all three outputs in a single connection point.

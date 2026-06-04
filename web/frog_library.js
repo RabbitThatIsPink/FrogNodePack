@@ -171,7 +171,7 @@ const CSS = `
 .pl-view-toggle .pl-btn.active { background: var(--pl-bg-selected-strong); border-color: var(--pl-accent); color: var(--pl-fg-strong); }
 .pl-modal { position: fixed; z-index: 10000; background: var(--pl-bg-elevated); color: var(--pl-fg);
   padding: 0 var(--pl-sp-lg) var(--pl-sp-lg);
-  border-radius: var(--pl-r-md); width: min(540px, calc(100vw - var(--pl-sp-xl))); max-height: 80vh; overflow-y: auto;
+  border-radius: var(--pl-r-md); width: min(1000px, calc(100vw - var(--pl-sp-xl))); max-height: 75vh; overflow-y: auto;
   box-shadow: 0 8px 32px rgba(0,0,0,0.6); border: 1px solid var(--pl-border);
   display: flex; flex-direction: column; gap: var(--pl-sp-md); font-family: sans-serif; font-size: 13px; }
 .pl-modal-header { position: sticky; top: 0; z-index: 1; }
