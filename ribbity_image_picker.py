@@ -302,8 +302,12 @@ if _server is not None and web is not None:
                 minimal   = _build_minimal_prompt(full_prompt, node_id)
                 prompt_id = str(uuid.uuid4())
                 extra     = {"client_id": client_id} if client_id else {}
-                # PromptQueue.put expects (number, prompt_id, prompt, extra_data, outputs_to_execute)
-                _server.prompt_queue.put((0, prompt_id, minimal, extra, None))
+
+                # ComfyUI Desktop's prompt_worker reads item[5] as a
+                # 'sensitive' boolean — use a 6-element tuple so it doesn't
+                # crash the worker thread.  Standard ComfyUI only reads up to
+                # item[4] so the extra element is silently ignored there.
+                _server.prompt_queue.put((0, prompt_id, minimal, extra, None, False))
                 queued = True
             except Exception as e:
                 print(f"[🐸 Image Picker] queue.put failed ({e}); JS will fall back to app.queuePrompt")
