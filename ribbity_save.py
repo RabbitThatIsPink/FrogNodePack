@@ -730,7 +730,7 @@ def _save_frames(images, params_str, full_prefix, filename, counter, subfolder,
 
     results = []
     batch_size = len(images)
-    _fmt = image_format.upper().replace("JPEG", "JPG")
+    _fmt = image_format.upper()  # PNG | JPG | JPEG | WEBP
 
     for frame_idx, frame in enumerate(images):
         if check_interrupt is not None:
@@ -753,7 +753,9 @@ def _save_frames(images, params_str, full_prefix, filename, counter, subfolder,
             else:
                 file_name = f"{filename}_{frame_idx:02d}.png"
 
-        ext = ".jpg" if _fmt == "JPG" else f".{_fmt.lower()}"
+        ext = {
+            "PNG": ".png", "JPG": ".jpg", "JPEG": ".jpeg", "WEBP": ".webp",
+        }.get(_fmt, f".{_fmt.lower()}")
         if file_name.endswith(".png") and ext != ".png":
             file_name = file_name[:-4] + ext
         counter += 1
@@ -768,7 +770,7 @@ def _save_frames(images, params_str, full_prefix, filename, counter, subfolder,
             for k, v in extra_text:
                 png_info.add_text(k, v)
             pil.save(full_path, format="PNG", pnginfo=png_info, compress_level=4)
-        elif _fmt == "JPG":
+        elif _fmt in ("JPG", "JPEG"):
             pil.convert("RGB").save(full_path, format="JPEG", quality=95, optimize=True)
         elif _fmt == "WEBP":
             pil.save(full_path, format="WEBP", quality=95, method=6)
@@ -819,7 +821,7 @@ class RibbitySaveA1111:
                     "default": "RibbityPack",
                     "tooltip": "Prefix for saved files. Supports %date:yyyy-MM-dd% tokens.",
                 }),
-                "image_format": (["PNG", "JPG", "WEBP"], {"default": "PNG"}),
+                "image_format": (["PNG", "JPG", "JPEG", "WEBP"], {"default": "PNG"}),
             },
             "optional": {
                 "output_path": ("STRING", {
@@ -922,7 +924,7 @@ class RibbitySaveHashEmbed:
                     "default": "RibbityPack",
                     "tooltip": "Prefix for saved files. Supports %date:yyyy-MM-dd% tokens.",
                 }),
-                "image_format": (["PNG", "JPG", "WEBP"], {"default": "PNG"}),
+                "image_format": (["PNG", "JPG", "JPEG", "WEBP"], {"default": "PNG"}),
             },
             "optional": {
                 "output_path": ("STRING", {
