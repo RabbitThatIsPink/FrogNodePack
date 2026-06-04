@@ -83,13 +83,6 @@ class FrogThumbnailSaverNode:
                     "tooltip": "When the IMAGE is a batch, which frame to "
                                "use as the thumbnail (1-based).",
                 }),
-                "enabled": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Must be True for a thumbnail to be saved. "
-                               "The 🐸 Library 'Queue ▶▶' button sets this "
-                               "automatically for each run — leave it False "
-                               "so regular queue runs never overwrite thumbnails.",
-                }),
             },
         }
 
@@ -103,11 +96,7 @@ class FrogThumbnailSaverNode:
     CATEGORY      = "🐸 Node Pack"
     OUTPUT_NODE   = True
 
-    def save_thumbnail(self, image, prompt_id: str = "", enabled: bool = False, frame_index=1):
-        if not enabled:
-            print("[🐸 Thumbnail Saver] skipping — use Library Queue ▶▶ to save thumbnails.")
-            return (image, "")
-
+    def save_thumbnail(self, image, prompt_id: str = "", frame_index=1):
         # Optional INT inputs arrive as "" when not connected — coerce safely.
         try:
             frame_index = int(frame_index)
