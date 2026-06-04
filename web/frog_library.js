@@ -3611,7 +3611,9 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
         }
       }
     } finally {
-      node._galleryQueueRunning = false;
+      // Restore widget values BEFORE clearing the queue flag so that the
+      // setValue → render() path triggered by idWidget.value changing is
+      // still suppressed during the restore.
       idWidget.value = savedIdWidgetValue;
       if (saverIdWidget) saverIdWidget.value = savedSaverIdValue;
       frogSavers.forEach((s, i) => {
@@ -3620,6 +3622,10 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
       });
       libraryNode.setDirtyCanvas?.(true, true);
       if (saverNode) saverNode.setDirtyCanvas?.(true, true);
+      // Clear flag after restore so any synchronous setValue calls fired by
+      // setDirtyCanvas are still suppressed, then yield to let async reactivity
+      // settle before re-enabling renders.
+      setTimeout(() => { node._galleryQueueRunning = false; }, 0);
     }
     if (!fails.length) {
       toast(`Queued ${queued} workflow run${queued === 1 ? "" : "s"}.`, "success", 6000);

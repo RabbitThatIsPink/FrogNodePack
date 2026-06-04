@@ -76,19 +76,19 @@ class FrogThumbnailSaverNode:
                     "tooltip": "ID of the library entry to update. "
                                "Auto-populated by the 🐸 Library gallery widget.",
                 }),
-                "enabled": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Must be True for a thumbnail to be saved. "
-                               "The 🐸 Library 'Queue ▶▶' button sets this "
-                               "automatically for each run — leave it False "
-                               "so regular queue runs never overwrite thumbnails.",
-                }),
             },
             "optional": {
                 "frame_index": ("INT", {
                     "default": 1, "min": 1, "max": 4096,
                     "tooltip": "When the IMAGE is a batch, which frame to "
                                "use as the thumbnail (1-based).",
+                }),
+                "enabled": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Must be True for a thumbnail to be saved. "
+                               "The 🐸 Library 'Queue ▶▶' button sets this "
+                               "automatically for each run — leave it False "
+                               "so regular queue runs never overwrite thumbnails.",
                 }),
             },
         }
