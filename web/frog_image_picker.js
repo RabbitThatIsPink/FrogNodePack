@@ -64,7 +64,9 @@ const _CSS = `
 /* ── grid ── */
 .fip-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  /* Fixed column width: tiles never stretch wider than 160px regardless of
+     how wide the user resizes the node, so they stay thumbnail-sized. */
+  grid-template-columns: repeat(auto-fill, minmax(130px, 160px));
   gap: 6px;
   overflow-y: auto;
   flex: 1;

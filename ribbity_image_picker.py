@@ -241,9 +241,17 @@ class FrogImagePicker:
                 "images":  ui_images,
             })
 
-        # Return empty batch — downstream Save skips gracefully.
-        empty = torch.zeros((0, *images.shape[1:]), dtype=images.dtype)
-        return {"ui": {"images": []}, "result": (empty,)}
+        # Stop execution here so no downstream node (Save, Preview, etc.)
+        # runs on the capture pass.  An empty tensor would crash ComfyUI's
+        # built-in SaveImage/PreviewImage nodes; an interrupt is cleaner.
+        try:
+            import comfy.model_management as _mm
+            raise _mm.InterruptProcessingException()
+        except ImportError:
+            # Fallback for unusual environments — return a 0-frame tensor and
+            # hope the downstream node handles it (our custom Save nodes do).
+            empty = torch.zeros((0, *images.shape[1:]), dtype=images.dtype)
+            return {"ui": {"images": []}, "result": (empty,)}
 
 
 # ---------------------------------------------------------------------------
