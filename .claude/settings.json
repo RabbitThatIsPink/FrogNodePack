@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \".claude\\update_timestamp.py\"",
+            "shell": "powershell",
+            "timeout": 30,
+            "statusMessage": "Updating README timestamp..."
+          }
+        ]
+      }
+    ]
+  }
+}
