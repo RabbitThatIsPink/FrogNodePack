@@ -2193,11 +2193,33 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
   // skip the render to avoid snapping the grid scroll back to the top.
   let _resizeRenderPending = false;
   let _suppressNextResizeRender = false;
+  // Tracks the last scroll position we observed while the grid was actually
+  // visible (clientHeight > 0).  Updated by renderWindow() on every scroll
+  // frame.  Used to restore position after a resize-triggered render that
+  // fired while the node was off-screen (clientHeight === 0), at which point
+  // the browser may have reset scrollTop to 0.
+  let _lastKnownScrollTop = 0;
   const _gridResizeObserver = new ResizeObserver(() => {
     if (_resizeRenderPending) return;
     if (_suppressNextResizeRender) { _suppressNextResizeRender = false; return; }
+    // If the node is hidden / off-screen the browser collapses clientHeight to
+    // 0 and may reset scrollTop to 0.  Rendering now would rebuild the virtual-
+    // scroll spacers with stale scroll data, snapping the grid to the top row.
+    // Skip the render entirely — the next resize event (when the node comes
+    // back into view) will re-render with correct dimensions and restore scroll.
+    if (grid.clientHeight === 0) return;
     _resizeRenderPending = true;
-    requestAnimationFrame(() => { _resizeRenderPending = false; render(); });
+    requestAnimationFrame(() => {
+      _resizeRenderPending = false;
+      render();
+      // Restore the scroll position we had before the node went off-screen.
+      // Double-rAF outlasts render()'s own async tile-build pass.
+      if (_lastKnownScrollTop > 0) {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          grid.scrollTop = _lastKnownScrollTop;
+        }));
+      }
+    });
   });
   _gridResizeObserver.observe(grid);
 
@@ -3189,6 +3211,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
 
       const scrollTop = grid.scrollTop;
       const viewH = grid.clientHeight || 400;
+      if (viewH > 0) _lastKnownScrollTop = scrollTop;  // keep last real position
 
       const firstRow = Math.max(0, Math.floor(scrollTop / rowH) - _VIRTUAL_OVERSCAN);
       const lastRow  = Math.min(totalRows - 1, Math.ceil((scrollTop + viewH) / rowH) + _VIRTUAL_OVERSCAN);
