@@ -54,6 +54,10 @@ from .ribbity_save_thumbnail import (
     NODE_CLASS_MAPPINGS        as _savethumb_classes,
     NODE_DISPLAY_NAME_MAPPINGS as _savethumb_names,
 )
+from .ribbity_image_picker import (
+    NODE_CLASS_MAPPINGS        as _picker_classes,
+    NODE_DISPLAY_NAME_MAPPINGS as _picker_names,
+)
 
 NODE_CLASS_MAPPINGS = {
     **_loader_classes,
@@ -70,6 +74,7 @@ NODE_CLASS_MAPPINGS = {
     **_merge2_classes,
     **_dedupe_classes,
     **_savethumb_classes,
+    **_picker_classes,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -87,6 +92,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_merge2_names,
     **_dedupe_names,
     **_savethumb_names,
+    **_picker_names,
 }
 
 # Serve frontend JS ONLY from ./web. Without this, ComfyUI auto-discovers and

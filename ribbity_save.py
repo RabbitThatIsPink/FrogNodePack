@@ -850,6 +850,10 @@ class RibbitySaveA1111:
              positive_text=None, negative_text=None,
              prompt=None, extra_pnginfo=None):
 
+        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
+        if images.shape[0] == 0:
+            return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
+
         filename_prefix = _expand_filename_tokens(filename_prefix or "RibbityPack")
         meta = extract_workflow_metadata(prompt)
 
@@ -955,6 +959,10 @@ class RibbitySaveHashEmbed:
              output_path="", show_preview=True, append_counter=True,
              positive_text=None, negative_text=None,
              prompt=None, extra_pnginfo=None):
+
+        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
+        if images.shape[0] == 0:
+            return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
 
         filename_prefix = _expand_filename_tokens(filename_prefix or "RibbityPack")
         meta = extract_workflow_metadata(prompt)
