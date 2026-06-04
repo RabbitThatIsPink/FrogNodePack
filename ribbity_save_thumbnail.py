@@ -76,6 +76,13 @@ class FrogThumbnailSaverNode:
                     "tooltip": "ID of the library entry to update. "
                                "Auto-populated by the 🐸 Library gallery widget.",
                 }),
+                "enabled": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Must be True for a thumbnail to be saved. "
+                               "The 🐸 Library 'Queue ▶▶' button sets this "
+                               "automatically for each run — leave it False "
+                               "so regular queue runs never overwrite thumbnails.",
+                }),
             },
             "optional": {
                 "frame_index": ("INT", {
@@ -96,7 +103,11 @@ class FrogThumbnailSaverNode:
     CATEGORY      = "🐸 Node Pack"
     OUTPUT_NODE   = True
 
-    def save_thumbnail(self, image, prompt_id: str = "", frame_index=1):
+    def save_thumbnail(self, image, prompt_id: str = "", enabled: bool = False, frame_index=1):
+        if not enabled:
+            print("[🐸 Thumbnail Saver] skipping — use Library Queue ▶▶ to save thumbnails.")
+            return (image, "")
+
         # Optional INT inputs arrive as "" when not connected — coerce safely.
         try:
             frame_index = int(frame_index)
