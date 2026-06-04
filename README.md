@@ -4,6 +4,12 @@ A custom node pack for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) focu
 
 ---
 
+## Updated
+
+Thursday, June 04 2026 - 16:15
+
+---
+
 ## Author
 
 Made by [RabbitThatIsPink](https://github.com/RabbitThatIsPink)
