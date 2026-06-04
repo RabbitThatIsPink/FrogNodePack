@@ -2202,24 +2202,12 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
   const _gridResizeObserver = new ResizeObserver(() => {
     if (_resizeRenderPending) return;
     if (_suppressNextResizeRender) { _suppressNextResizeRender = false; return; }
-    // If the node is hidden / off-screen the browser collapses clientHeight to
-    // 0 and may reset scrollTop to 0.  Rendering now would rebuild the virtual-
-    // scroll spacers with stale scroll data, snapping the grid to the top row.
-    // Skip the render entirely — the next resize event (when the node comes
-    // back into view) will re-render with correct dimensions and restore scroll.
+    // Skip renders when the grid is hidden / collapsed — clientHeight 0 means
+    // the viewport is invalid and scrollTop may already be 0.  render() will
+    // fire again when the node comes back into view and clientHeight recovers.
     if (grid.clientHeight === 0) return;
     _resizeRenderPending = true;
-    requestAnimationFrame(() => {
-      _resizeRenderPending = false;
-      render();
-      // Restore the scroll position we had before the node went off-screen.
-      // Double-rAF outlasts render()'s own async tile-build pass.
-      if (_lastKnownScrollTop > 0) {
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          grid.scrollTop = _lastKnownScrollTop;
-        }));
-      }
-    });
+    requestAnimationFrame(() => { _resizeRenderPending = false; render(); });
   });
   _gridResizeObserver.observe(grid);
 
@@ -2970,6 +2958,13 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
   };
 
   const render = ({ bubbleSelected = false } = {}) => {
+    // Save scroll position before replaceChildren() collapses the scroll height.
+    // Removing all children sets scrollHeight → 0, which forces the browser to
+    // clamp scrollTop to 0.  By the time the virtual-scroll renderWindow fires
+    // in its rAF, scrollTop is already 0 and the gallery snaps to row 0.
+    // Fall back to _lastKnownScrollTop when the grid was hidden (e.g. node went
+    // off-screen on canvas zoom) and the browser already silently reset scrollTop.
+    const _savedScroll = grid.scrollTop || _lastKnownScrollTop;
     writeState();
     updateModelSelect();
     renderTags();
@@ -3167,6 +3162,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
       visible.forEach((p, idx) => fragment.appendChild(buildTile(p, idx)));
       fragment.appendChild(buildAddTile());
       grid.appendChild(fragment);
+      if (_savedScroll > 0) grid.scrollTop = _savedScroll;
       // Remove any virtual scroll listener from a previous large render
       grid._vsCleanup?.();
       return;
@@ -3200,8 +3196,17 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
     spacerTop.style.width = "100%";
     spacerBot.style.width = "100%";
 
+    // Prime the top spacer with the saved scroll height so the grid has enough
+    // scroll room before we restore scrollTop.  Without content, scrollHeight = 0
+    // and setting scrollTop is clamped to 0 immediately.  renderWindow() will
+    // recalculate and set the correct height once it measures real tiles.
+    if (_savedScroll > 0) spacerTop.style.height = _savedScroll + "px";
+
     grid.appendChild(spacerTop);
     grid.appendChild(spacerBot);
+
+    // Restore scroll position now that there is content to scroll to.
+    if (_savedScroll > 0) grid.scrollTop = _savedScroll;
 
     let _renderedStart = -1;
     let _renderedEnd = -1;
@@ -3211,7 +3216,9 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
 
       const scrollTop = grid.scrollTop;
       const viewH = grid.clientHeight || 400;
-      if (viewH > 0) _lastKnownScrollTop = scrollTop;  // keep last real position
+      // Guard on clientHeight directly — viewH uses a || fallback that makes
+      // the guard always true when the grid is hidden (clientHeight === 0).
+      if (grid.clientHeight > 0) _lastKnownScrollTop = scrollTop;
 
       const firstRow = Math.max(0, Math.floor(scrollTop / rowH) - _VIRTUAL_OVERSCAN);
       const lastRow  = Math.min(totalRows - 1, Math.ceil((scrollTop + viewH) / rowH) + _VIRTUAL_OVERSCAN);
