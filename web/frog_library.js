@@ -3587,6 +3587,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
     const savedFrogSaverValues = frogSaverWidgets.map(w => w.value);
     let queued = 0;
     const fails = [];
+    node._galleryQueueRunning = true;
     try {
       for (const id of ids) {
         idWidget.value = id;
@@ -3602,6 +3603,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
         }
       }
     } finally {
+      node._galleryQueueRunning = false;
       idWidget.value = savedIdWidgetValue;
       if (saverIdWidget) saverIdWidget.value = savedSaverIdValue;
       frogSaverWidgets.forEach((w, i) => { w.value = savedFrogSaverValues[i]; });
@@ -5110,7 +5112,9 @@ app.registerExtension({
           }
           if (idWidget) idWidget.value = v;
           syncFromWidget?.("galleryWidget.setValue");
-          render?.();
+          // Skip render while the queue loop is cycling idWidget.value through
+          // each entry — those are transient writes, not real selection changes.
+          if (!this._galleryQueueRunning) render?.();
         },
       });
       this._promptLibraryRender = render;
