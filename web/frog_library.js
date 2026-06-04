@@ -2231,15 +2231,6 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
   };
   const syncWidget = () => {
     idWidget.value = [...checkedIds].join(",");
-    // Keep any FrogThumbnailSaver nodes in sync so a plain queue run
-    // immediately targets the selected entry (mirrors the Queue ▶▶ behaviour
-    // for single-entry selections).
-    const firstId = checkedIds.size ? [...checkedIds][0] : "";
-    for (const n of (app.graph?._nodes || [])) {
-      if (n.type !== "FrogThumbnailSaver") continue;
-      const w = n.widgets?.find(w => w.name === "prompt_id");
-      if (w) w.value = firstId;
-    }
     if (!node._dirtyCanvasScheduled) {
       node._dirtyCanvasScheduled = true;
       setTimeout(() => {
@@ -3565,16 +3556,12 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
     // lock-step so each run thumbnails the entry it loaded.
     const saverNode = app.graph?._nodes?.find(n => n.type === "PromptLibraryThumbnailSaver");
     const saverIdWidget = saverNode?.widgets?.find(w => w.name === "prompt_id");
-    // Collect FrogThumbnailSaver nodes: drive prompt_id in lock-step AND flip
-    // their 'enabled' widget to true so the node saves. Always restored to
-    // false in finally — regular runs leave enabled=false and skip saving.
-    const frogSavers = (app.graph?._nodes || [])
+    // Collect all FrogThumbnailSaver prompt_id widgets so Queue ▶▶ drives
+    // them in lock-step, same as PromptLibraryThumbnailSaver above.
+    const frogSaverWidgets = (app.graph?._nodes || [])
       .filter(n => n.type === "FrogThumbnailSaver")
-      .map(n => ({
-        idWidget:      n.widgets?.find(w => w.name === "prompt_id"),
-        enabledWidget: n.widgets?.find(w => w.name === "enabled"),
-      }))
-      .filter(s => s.idWidget);
+      .map(n => n.widgets?.find(w => w.name === "prompt_id"))
+      .filter(Boolean);
     if (ids.length > 10) {
       const ok = await confirmDestructive(
         `Queue ${ids.length} workflow runs? Each will run with a different library entry.`,
@@ -3588,7 +3575,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
     // next page refresh.
     const savedIdWidgetValue = idWidget.value;
     const savedSaverIdValue = saverIdWidget?.value;
-    const savedFrogSaverIds = frogSavers.map(s => s.idWidget.value);
+    const savedFrogSaverValues = frogSaverWidgets.map(w => w.value);
     let queued = 0;
     const fails = [];
     node._galleryQueueRunning = true;
@@ -3596,10 +3583,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
       for (const id of ids) {
         idWidget.value = id;
         if (saverIdWidget) saverIdWidget.value = id;
-        for (const s of frogSavers) {
-          s.idWidget.value = id;
-          if (s.enabledWidget) s.enabledWidget.value = true;
-        }
+        for (const w of frogSaverWidgets) w.value = id;
         libraryNode.setDirtyCanvas?.(true, true);
         if (saverNode) saverNode.setDirtyCanvas?.(true, true);
         try {
@@ -3614,12 +3598,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
       // idWidget restore cannot trigger a render via setValue.
       idWidget.value = savedIdWidgetValue;
       if (saverIdWidget) saverIdWidget.value = savedSaverIdValue;
-      frogSavers.forEach((s, i) => {
-        s.idWidget.value = savedFrogSaverIds[i];
-        // Always restore enabled to false — it must never be left true
-        // after Queue ▶▶ or a regular run would save a thumbnail.
-        if (s.enabledWidget) s.enabledWidget.value = false;
-      });
+      frogSaverWidgets.forEach((w, i) => { w.value = savedFrogSaverValues[i]; });
       libraryNode.setDirtyCanvas?.(true, true);
       if (saverNode) saverNode.setDirtyCanvas?.(true, true);
       // Use two rAFs so the flag outlasts both Vue nextTick and any
