@@ -80,7 +80,7 @@ const _CSS = `
   overflow: hidden;
   background: #1a1a1a;
   transition: border-color 80ms;
-  aspect-ratio: 1 / 1;
+  /* No fixed aspect-ratio — image determines height naturally */
 }
 .fip-tile:hover              { border-color: #555; }
 .fip-tile.fip-selected       { border-color: #4aaa7a; }
@@ -88,8 +88,7 @@ const _CSS = `
 
 .fip-tile img {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
   display: block;
   pointer-events: none;
 }
@@ -144,64 +143,21 @@ function _injectCSS() {
   document.head.appendChild(s);
 }
 
-// ─── Graph helpers ───────────────────────────────────────────────────────────
+// ─── Graph helper ────────────────────────────────────────────────────────────
 
 /**
- * Return the set of node IDs that are downstream (reachable via outputs)
- * from startId in the given ComfyUI prompt object.
+ * Serialise the current graph to the API prompt format.
+ * Returns the output object, or null if graphToPrompt is unavailable / throws.
  */
-function getDownstreamIds(prompt, startId) {
-  // Build forward-adjacency: srcId -> [consumerIds]
-  const fwd = {};
-  for (const [id, node] of Object.entries(prompt)) {
-    for (const val of Object.values(node.inputs ?? {})) {
-      if (Array.isArray(val) && val.length === 2) {
-        const src = String(val[0]);
-        (fwd[src] ??= []).push(id);
-      }
-    }
+async function getFullPrompt() {
+  try {
+    const result = await app.graphToPrompt();
+    // Different ComfyUI versions may return {output, workflow} or just the output
+    return result?.output ?? result ?? null;
+  } catch (e) {
+    console.warn("[🐸 Image Picker] graphToPrompt failed:", e);
+    return null;
   }
-  // BFS
-  const result = new Set();
-  const queue  = [startId];
-  while (queue.length) {
-    for (const dep of (fwd[queue.shift()] ?? [])) {
-      if (!result.has(dep)) { result.add(dep); queue.push(dep); }
-    }
-  }
-  return result;
-}
-
-/**
- * Build a minimal prompt containing only the Picker node + its downstream
- * dependents.  Connections that reference nodes NOT in the minimal set are
- * removed so ComfyUI doesn't complain about missing upstream nodes.
- * The Picker's own "images" input is stripped (it reads from disk).
- */
-async function buildMinimalPrompt(pickerNodeId) {
-  const { output: fullPrompt, workflow } = await app.graphToPrompt();
-  const keep = new Set([pickerNodeId, ...getDownstreamIds(fullPrompt, pickerNodeId)]);
-
-  const minimal = {};
-  for (const [id, node] of Object.entries(fullPrompt)) {
-    if (!keep.has(id)) continue;
-    const copy = JSON.parse(JSON.stringify(node));
-
-    // Strip the Picker's upstream IMAGE input (it uses stored disk frames).
-    if (id === pickerNodeId) {
-      delete copy.inputs?.images;
-    }
-
-    // Remove any remaining input connections that point outside the minimal set.
-    for (const [k, v] of Object.entries(copy.inputs ?? {})) {
-      if (Array.isArray(v) && v.length === 2 && !keep.has(String(v[0]))) {
-        delete copy.inputs[k];
-      }
-    }
-
-    minimal[id] = copy;
-  }
-  return { minimal, workflow };
 }
 
 // ─── Widget builder ──────────────────────────────────────────────────────────
@@ -342,38 +298,45 @@ function buildPickerWidget(node) {
     const nodeId    = String(node.id);
     const selection = [...selectedIndices].sort((a, b) => a - b);
 
-    proceedBtn.disabled   = true;
+    proceedBtn.disabled    = true;
     proceedBtn.textContent = "…";
-    status.textContent    = "Queuing…";
+    status.textContent     = "Queuing…";
 
     try {
-      // 1. Tell the server which frames to output on the next run.
-      const setResp = await fetch("/frog_picker/proceed", {
+      // Serialise the current graph so Python can build the minimal
+      // sub-prompt (Picker + downstream only, KSampler stripped).
+      const fullPrompt = await getFullPrompt();
+
+      const resp = await fetch("/frog_picker/proceed", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ node_id: nodeId, selection }),
+        body:    JSON.stringify({
+          node_id:   nodeId,
+          selection,
+          prompt:    fullPrompt,          // Python handles graph trimming
+          client_id: api.clientId ?? "",
+        }),
       });
-      if (!setResp.ok) throw new Error(`/frog_picker/proceed → ${setResp.status}`);
+      if (!resp.ok) throw new Error(`/frog_picker/proceed → ${resp.status}`);
 
-      // 2. Build a minimal prompt (Picker + downstream only — no KSampler).
-      const { minimal, workflow } = await buildMinimalPrompt(nodeId);
+      const result = await resp.json();
 
-      // 3. Queue only that partial graph.
-      await api.queuePrompt(0, {
-        client_id:  api.clientId,
-        prompt:     minimal,
-        extra_data: { extra_pnginfo: { workflow } },
-      });
+      if (!result.queued) {
+        // Python couldn't queue directly (e.g. older ComfyUI build) —
+        // fall back to full workflow.  KSampler re-runs but Picker
+        // uses stored frames so the correct images are still saved.
+        console.warn("[🐸 Image Picker] server-side queue unavailable, falling back to full queue");
+        await app.queuePrompt(0, 1);
+      }
 
-      // Reset UI — the save will run in the background.
       resetUI();
       proceedBtn.textContent = "▶  Proceed";
 
     } catch (err) {
       console.error("[🐸 Image Picker] proceed failed:", err);
-      proceedBtn.disabled   = false;
+      proceedBtn.disabled    = false;
       proceedBtn.textContent = "▶  Proceed";
-      status.textContent    = "⚠ Proceed failed — check console";
+      status.textContent     = "⚠ Proceed failed — check console";
     }
   });
 

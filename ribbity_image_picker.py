@@ -8,7 +8,9 @@ Cancel discards the stored batch and resets the node.
 """
 from __future__ import annotations
 
+import copy
 import os
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -107,6 +109,58 @@ def _load_frames(paths: list[str], indices: list[int]):
     if not frames:
         return None
     return torch.cat(frames, dim=0)
+
+
+# ---------------------------------------------------------------------------
+# Minimal-prompt builder
+# ---------------------------------------------------------------------------
+
+def _build_minimal_prompt(full_prompt: dict, picker_node_id: str) -> dict:
+    """
+    Return a copy of full_prompt that contains only the Picker node and its
+    downstream dependents, with the Picker's `images` input removed so
+    KSampler (and everything upstream) is never executed.
+
+    Any remaining input connections that point outside the kept set are also
+    stripped so ComfyUI doesn't complain about missing upstream nodes.
+    """
+    pid = str(picker_node_id)
+
+    # Build forward-adjacency: src_id -> [consumer_ids]
+    fwd: dict[str, list[str]] = {}
+    for nid, node in full_prompt.items():
+        for val in (node.get("inputs") or {}).values():
+            if isinstance(val, list) and len(val) == 2:
+                src = str(val[0])
+                fwd.setdefault(src, []).append(str(nid))
+
+    # BFS from Picker to find all downstream nodes
+    downstream: set[str] = set()
+    q = [pid]
+    while q:
+        curr = q.pop(0)
+        for dep in fwd.get(curr, []):
+            if dep not in downstream:
+                downstream.add(dep)
+                q.append(dep)
+
+    keep = {pid} | downstream
+
+    minimal: dict = {}
+    for nid, node in full_prompt.items():
+        nid = str(nid)
+        if nid not in keep:
+            continue
+        nc = copy.deepcopy(node)
+        if nid == pid:
+            (nc.get("inputs") or {}).pop("images", None)
+        # Remove any input connections pointing outside the kept set
+        for k, v in list((nc.get("inputs") or {}).items()):
+            if isinstance(v, list) and len(v) == 2 and str(v[0]) not in keep:
+                del nc["inputs"][k]
+        minimal[nid] = nc
+
+    return minimal
 
 
 # ---------------------------------------------------------------------------
@@ -218,18 +272,37 @@ if _server is not None and web is not None:
         except Exception:
             return web.json_response({"ok": False, "error": "bad JSON"}, status=400)
 
-        node_id   = str(data.get("node_id", ""))
-        selection = data.get("selection", [])
+        node_id     = str(data.get("node_id", ""))
+        selection   = data.get("selection", [])
+        full_prompt = data.get("prompt") or {}
+        client_id   = str(data.get("client_id") or "")
 
         if not node_id:
             return web.json_response({"ok": False, "error": "missing node_id"}, status=400)
 
+        # Mark this node as ready to output its stored selection.
         state = _picker_state.get(node_id, {})
         state["selection"] = [int(i) for i in selection if str(i).strip().lstrip("-").isdigit()]
         state["ready"]     = True
         _picker_state[node_id] = state
 
-        return web.json_response({"ok": True})
+        # Build a minimal prompt (Picker + downstream only) so KSampler and
+        # everything upstream is skipped on this queue run.
+        queued = False
+        if full_prompt and _server is not None:
+            try:
+                minimal   = _build_minimal_prompt(full_prompt, node_id)
+                prompt_id = str(uuid.uuid4())
+                extra     = {"client_id": client_id} if client_id else {}
+                # PromptQueue.put expects (number, prompt_id, prompt, extra_data, outputs_to_execute)
+                _server.prompt_queue.put((0, prompt_id, minimal, extra, None))
+                queued = True
+            except Exception as e:
+                print(f"[🐸 Image Picker] queue.put failed ({e}); JS will fall back to app.queuePrompt")
+
+        # queued=False tells the JS to fall back to app.queuePrompt(0,1) so
+        # images are still saved (KSampler re-runs, but Picker uses stored frames).
+        return web.json_response({"ok": True, "queued": queued})
 
     @routes.post("/frog_picker/cancel")
     async def _picker_cancel(request: web.Request) -> web.Response:
