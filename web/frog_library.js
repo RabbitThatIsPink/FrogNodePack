@@ -2945,7 +2945,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
     }
   };
 
-  const render = () => {
+  const render = ({ bubbleSelected = false } = {}) => {
     writeState();
     updateModelSelect();
     renderTags();
@@ -3016,11 +3016,10 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
     } else {
       visible = [...visible].sort(mode.cmp);
     }
-    // Lift selected tiles to the top so the user can see what's currently
-    // checked without scrolling. Stable within each group so the sort order
-    // is preserved; deselecting drops the tile back to its natural spot.
-    // Skipped in Manual mode because drag-reorder relies on the natural order.
-    if (sortSelect.value !== "manual" && checkedIds.size) {
+    // Lift selected tiles to the top — only when the user explicitly presses
+    // Refresh, so multi-selecting several entries doesn't shuffle positions
+    // mid-selection. Skipped in Manual mode (drag-reorder relies on order).
+    if (bubbleSelected && sortSelect.value !== "manual" && checkedIds.size) {
       visible.sort((a, b) => Number(checkedIds.has(b.id)) - Number(checkedIds.has(a.id)));
     }
     lastVisible = visible;
@@ -3311,10 +3310,10 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
     };
   };
 
-  const refresh = async () => {
+  const refresh = async ({ bubbleSelected = false } = {}) => {
     try {
       prompts = await fetchList();
-      render();
+      render({ bubbleSelected });
     } catch (e) {
       grid.replaceChildren();
       const err = document.createElement("div");
@@ -3341,7 +3340,7 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
       render();
     }, 80);
   });
-  refreshBtn.onclick = withBusy(refreshBtn, "…", refresh);
+  refreshBtn.onclick = withBusy(refreshBtn, "…", () => refresh({ bubbleSelected: true }));
   applySize();
   applyView();
   sortSelect.onchange = () => {
