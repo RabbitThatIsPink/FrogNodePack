@@ -2188,9 +2188,14 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
   // Re-render when the node resizes so the virtual-scroll viewport calculation
   // uses the actual clientHeight rather than the 0-fallback present on fresh
   // node creation.  Debounced to one rAF so rapid drag-resize stays smooth.
+  // _suppressNextResizeRender is set by updateBulkBar when the bar's visibility
+  // changes — that resize is just a layout shift, not a node resize, so we
+  // skip the render to avoid snapping the grid scroll back to the top.
   let _resizeRenderPending = false;
+  let _suppressNextResizeRender = false;
   const _gridResizeObserver = new ResizeObserver(() => {
     if (_resizeRenderPending) return;
+    if (_suppressNextResizeRender) { _suppressNextResizeRender = false; return; }
     _resizeRenderPending = true;
     requestAnimationFrame(() => { _resizeRenderPending = false; render(); });
   });
@@ -2323,8 +2328,14 @@ function buildGallery(node, idWidget, propsKey = "pl_state") {
 
   const updateBulkBar = () => {
     if (checkedIds.size === 0) {
-      bulkBar.style.display = "none";
+      if (bulkBar.style.display !== "none") {
+        _suppressNextResizeRender = true;
+        bulkBar.style.display = "none";
+      }
     } else {
+      if (bulkBar.style.display === "none" || bulkBar.style.display === "") {
+        _suppressNextResizeRender = true;
+      }
       bulkBar.style.display = "flex";
       bulkCount.textContent = `${checkedIds.size} selected`;
     }
