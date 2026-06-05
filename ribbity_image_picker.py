@@ -1,18 +1,23 @@
 """
 🐸 Image Picker — sits between KSampler and a Save node.
 
-Capture run : receives the image batch → stores frames → shows thumbnails
-              → interrupts execution (nothing downstream runs yet).
+Capture run  : receives the image batch → stores frames → shows thumbnails
+               → interrupts execution (nothing downstream runs yet).
+               If hold_queue=True, also drains ComfyUI's pending queue so
+               subsequent jobs don't run until the user acts.
 
-Proceed run : /frog_picker/proceed builds a minimal prompt and posts it
-              to ComfyUI's own /prompt API endpoint (avoids direct queue
-              manipulation and works on all ComfyUI builds).
+Proceed run  : /frog_picker/proceed builds a minimal prompt (Picker + Save,
+               no KSampler) and posts it to ComfyUI's own /prompt endpoint.
+               The full workflow is stashed in extra_pnginfo so Save nodes
+               can still extract metadata (model, seed, prompt text, LoRAs).
+               Restores any held queue items after the proceed run completes.
 
-Cancel      : clears stored frames and resets the node.
+Cancel       : clears stored frames, resets the node, restores held queue.
 """
 from __future__ import annotations
 
 import copy
+import heapq as _heapq
 import os
 import uuid
 from pathlib import Path
@@ -45,6 +50,55 @@ ROOT = Path(__file__).parent
 # Per-node runtime state  { node_id: {ready, paths, selection} }
 # ---------------------------------------------------------------------------
 _state: dict[str, dict] = {}
+
+# Queue items held while the user reviews a batch (hold_queue=True)
+_held: dict[str, list] = {}
+
+
+# ---------------------------------------------------------------------------
+# Queue hold / restore
+# ---------------------------------------------------------------------------
+
+def _drain_queue(node_id: str) -> None:
+    """Pull all pending items out of ComfyUI's queue and hold them."""
+    if _server is None:
+        return
+    try:
+        q = _server.prompt_queue
+        with q.mutex:
+            held = list(q.queue)
+            q.queue.clear()
+        _held[node_id] = held
+        try:
+            _server.queue_updated()
+        except Exception:
+            pass
+        if held:
+            print(f"[🐸 Image Picker] holding {len(held)} queued prompt(s).")
+    except Exception as e:
+        print(f"[🐸 Image Picker] _drain_queue: {e}")
+
+
+def _restore_queue(node_id: str) -> None:
+    """Put held queue items back so ComfyUI can continue."""
+    if _server is None:
+        return
+    held = _held.pop(node_id, [])
+    if not held:
+        return
+    try:
+        q = _server.prompt_queue
+        with q.mutex:
+            for item in held:
+                _heapq.heappush(q.queue, item)
+            q.not_empty.notify_all()
+        try:
+            _server.queue_updated()
+        except Exception:
+            pass
+        print(f"[🐸 Image Picker] restored {len(held)} queued prompt(s).")
+    except Exception as e:
+        print(f"[🐸 Image Picker] _restore_queue: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -108,14 +162,12 @@ def _build_minimal_prompt(full_prompt: dict, picker_id: str) -> dict:
     """
     pid = str(picker_id)
 
-    # Forward adjacency map: source_node_id → [consumer_node_ids]
     fwd: dict[str, list[str]] = {}
     for nid, node in full_prompt.items():
         for val in (node.get("inputs") or {}).values():
             if isinstance(val, list) and len(val) == 2:
                 fwd.setdefault(str(val[0]), []).append(str(nid))
 
-    # BFS from Picker to collect downstream nodes
     downstream: set[str] = set()
     q = [pid]
     while q:
@@ -131,10 +183,8 @@ def _build_minimal_prompt(full_prompt: dict, picker_id: str) -> dict:
         if nid not in keep:
             continue
         nc = copy.deepcopy(node)
-        # Strip the upstream image connection from the Picker node
         if nid == pid:
             (nc.get("inputs") or {}).pop("images", None)
-        # Remove any remaining links to nodes we're not keeping
         for k, v in list((nc.get("inputs") or {}).items()):
             if isinstance(v, list) and len(v) == 2 and str(v[0]) not in keep:
                 del nc["inputs"][k]
@@ -151,7 +201,16 @@ class FrogImagePicker:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {},
+            "required": {
+                "hold_queue": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "OFF — new batches immediately replace any lingering selection.\n"
+                        "ON  — ComfyUI's queue is paused after each capture; remaining "
+                        "jobs resume only after you Proceed or Cancel."
+                    ),
+                }),
+            },
             "optional": {
                 # Not provided on the Proceed run — Picker reads disk frames.
                 "images": ("IMAGE",),
@@ -169,7 +228,8 @@ class FrogImagePicker:
     FUNCTION      = "pick"
     CATEGORY      = "🐸 Node Pack"
 
-    def pick(self, images=None, unique_id=None, prompt=None, extra_pnginfo=None):
+    def pick(self, hold_queue=False, images=None,
+             unique_id=None, prompt=None, extra_pnginfo=None):
         import torch
 
         node_id = str(unique_id or "0")
@@ -183,6 +243,8 @@ class FrogImagePicker:
             if output is None:
                 output = torch.zeros((0, 1, 1, 3), dtype=torch.float32)
             _state[node_id] = {"ready": False, "paths": [], "selection": []}
+            # Restore any held queue items now that this batch is processed.
+            _restore_queue(node_id)
             return {"ui": {"images": []}, "result": (output,)}
 
         # ── Capture run ──────────────────────────────────────────────────────
@@ -190,15 +252,26 @@ class FrogImagePicker:
             empty = torch.zeros((0, 1, 1, 3), dtype=torch.float32)
             return {"ui": {"images": []}, "result": (empty,)}
 
+        # Single image — pass through immediately, no user interaction needed.
+        if images.shape[0] == 1:
+            return {"ui": {"images": []}, "result": (images,)}
+
         paths, ui_images = _save_frames(images, node_id)
-        _state[node_id]  = {"ready": False, "paths": paths, "selection": []}
+        _state[node_id] = {
+            "ready":     False,
+            "paths":     paths,
+            "selection": [],
+        }
 
-        # Notify the DOM widget via WebSocket (avoids duplicate image strip)
         if _server is not None:
-            _server.send_sync("frog_picker.captured",
-                              {"node_id": node_id, "images": ui_images})
+            _server.send_sync("frog_picker.clear",    {"node_id": node_id})
+            _server.send_sync("frog_picker.captured", {"node_id": node_id, "images": ui_images})
 
-        # Interrupt so nothing downstream runs on the capture pass.
+        # When hold_queue is on, drain ComfyUI's pending queue so no further
+        # jobs start until the user clicks Proceed or Cancel.
+        if hold_queue:
+            _drain_queue(node_id)
+
         import comfy.model_management as _mm
         raise _mm.InterruptProcessingException()
 
@@ -229,12 +302,13 @@ if _server is not None and web is not None and _aio is not None:
         selection   = [int(i) for i in (data.get("selection") or [])
                        if str(i).lstrip("-").isdigit()]
         full_prompt = data.get("prompt") or {}
+        workflow    = data.get("workflow")
         client_id   = str(data.get("client_id") or "")
 
         if not node_id:
             return web.json_response({"ok": False, "error": "missing node_id"}, status=400)
 
-        # Mark node as ready so the Proceed run returns the selected frames.
+        # Mark node ready so the next pick() call returns selected frames.
         st = _state.get(node_id, {})
         st["selection"] = selection
         st["ready"]     = True
@@ -244,10 +318,22 @@ if _server is not None and web is not None and _aio is not None:
         if full_prompt:
             try:
                 minimal = _build_minimal_prompt(full_prompt, node_id)
-                # Route through ComfyUI's own /prompt endpoint — it handles all
-                # internal queue formats correctly across standard + Desktop builds.
+
                 port    = req.url.port or 8188
-                payload = {"prompt": minimal, "client_id": client_id}
+                payload = {
+                    "prompt":     minimal,
+                    "client_id":  client_id,
+                    # Stash the full workflow so downstream Save nodes can still
+                    # extract seed / model / LoRA metadata even though the minimal
+                    # prompt has the KSampler stripped out.
+                    # Include the graph workflow so the PNG is tagged as ComfyUI.
+                    "extra_data": {
+                        "extra_pnginfo": {
+                            "frog_source_prompt": full_prompt,
+                            **({"workflow": workflow} if isinstance(workflow, dict) else {}),
+                        }
+                    },
+                }
                 async with _aio.ClientSession() as session:
                     async with session.post(
                         f"http://127.0.0.1:{port}/prompt", json=payload
@@ -277,6 +363,8 @@ if _server is not None and web is not None and _aio is not None:
                 except Exception:
                     pass
             _state[node_id] = {"ready": False, "paths": [], "selection": []}
+            # Restore held queue so ComfyUI can continue with remaining jobs.
+            _restore_queue(node_id)
 
         return web.json_response({"ok": True})
 

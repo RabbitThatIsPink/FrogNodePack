@@ -220,6 +220,7 @@ class RibbityWildcardResolver:
                     "default": 0,
                     "min": 0,
                     "max": 0xffffffffffffffff,
+                    "control_after_generate": "randomize",
                     "tooltip": "Seed for wildcard picks. 0 = random each run.",
                 }),
                 "use_builtin_opposites": ("BOOLEAN", {

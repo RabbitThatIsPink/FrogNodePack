@@ -141,18 +141,6 @@ function injectCSS() {
   document.head.appendChild(s);
 }
 
-// ─── Serialise graph ─────────────────────────────────────────────────────────
-
-async function getPrompt() {
-  try {
-    const r = await app.graphToPrompt();
-    return r?.output ?? r ?? null;
-  } catch (e) {
-    console.warn("[🐸 Image Picker] graphToPrompt:", e);
-    return null;
-  }
-}
-
 // ─── Widget ──────────────────────────────────────────────────────────────────
 
 function buildWidget(node) {
@@ -272,7 +260,9 @@ function buildWidget(node) {
     proceedBtn.textContent = "…";
     status.textContent     = "Queuing…";
     try {
-      const prompt = await getPrompt();
+      const graph    = await app.graphToPrompt().catch(() => null);
+      const prompt   = graph?.output   ?? null;
+      const workflow = graph?.workflow  ?? null;
       const r = await fetch("/frog_picker/proceed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -280,6 +270,7 @@ function buildWidget(node) {
           node_id:   String(node.id),
           selection: [...sel].sort((a, b) => a - b),
           prompt,
+          workflow,
           client_id: api.clientId ?? "",
         }),
       });
@@ -311,17 +302,41 @@ function buildWidget(node) {
     reset();
   };
 
-  // ── Listen for captured-batch WS event ──
+  // ── helpers ──
+  const holdQueueOn = () =>
+    node.widgets?.find(w => w.name === "hold_queue")?.value === true;
+
+  // ── Listen for WS events ──
+
+  // C: explicit clear sent by Python before each new capture (auto_replace ON)
+  const onClear = ({ detail }) => {
+    if (String(detail?.node_id) !== String(node.id)) return;
+    reset();
+  };
+
   const onCapture = ({ detail }) => {
     if (String(detail?.node_id) !== String(node.id)) return;
     populate(detail.images);
   };
+
+  // B: new job started — only reset if hold_queue is OFF
+  const onExecStart = () => {
+    if (total > 0 && !holdQueueOn()) {
+      reset();
+      status.textContent = "Generating…";
+    }
+  };
+
+  api.addEventListener("frog_picker.clear",    onClear);
   api.addEventListener("frog_picker.captured", onCapture);
+  api.addEventListener("execution_start",      onExecStart);
 
   const origRemoved = node.onRemoved;
   node.onRemoved = function (...a) {
     _ro.disconnect();
+    api.removeEventListener("frog_picker.clear",    onClear);
     api.removeEventListener("frog_picker.captured", onCapture);
+    api.removeEventListener("execution_start",      onExecStart);
     return origRemoved?.apply(this, a);
   };
 

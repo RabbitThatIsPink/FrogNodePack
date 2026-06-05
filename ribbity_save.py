@@ -26,6 +26,11 @@ except ImportError:
     folder_paths = None
 
 ROOT = Path(__file__).parent
+
+try:
+    from .ribbity_clip_text_encode import RibbityCLIPTextEncode as _CTE
+except Exception:
+    _CTE = None
 DATA_DIR = ROOT / "data"
 HASH_CACHE_PATH = DATA_DIR / "hash_cache.json"
 
@@ -280,7 +285,7 @@ _MODEL_PASSTHROUGH_TYPES = {
     "RescaleCFG", "PerpNeg",
 }
 _SAMPLER_PARAM_KEYS = ("seed", "steps", "cfg", "sampler_name", "scheduler", "noise_seed")
-_TEXT_LINK_MAX_DEPTH = 4
+_TEXT_LINK_MAX_DEPTH = 8
 
 
 def _link_source(value):
@@ -423,6 +428,80 @@ def _resolve_text_link(prompt: dict, link_value, depth: int = 0) -> str:
             if resolved:
                 return resolved
         return ""
+
+    if ctype == "FrogLibrary":
+        # Output slot 2 = positive STRING, slot 3 = negative STRING.
+        # Text comes from prompts.json at runtime — read it here.
+        output_idx = link_value[1] if isinstance(link_value, list) and len(link_value) >= 2 else 2
+        if output_idx not in (2, 3):
+            return ""
+        is_neg = (output_idx == 3)
+
+        # Resolve prompt_id (prompt_id_input widget overrides the selector)
+        pid_override = inputs.get("prompt_id_input")
+        if isinstance(pid_override, str) and pid_override.strip():
+            pid = pid_override
+        elif isinstance(pid_override, list):
+            pid = _resolve_text_link(prompt, pid_override, depth + 1) or ""
+        else:
+            raw_pid = inputs.get("prompt_id", "")
+            pid = raw_pid if isinstance(raw_pid, str) else ""
+
+        ids = [p.strip() for p in pid.split(",") if p.strip()]
+        if not ids:
+            return ""
+
+        try:
+            pf = DATA_DIR / "prompts.json"
+            with pf.open("r", encoding="utf-8") as _f:
+                _raw = json.load(_f)
+            _items_list = _raw if isinstance(_raw, list) else _raw.get("prompts", [])
+            lib_entries = {i.get("id"): i for i in _items_list if isinstance(i, dict)}
+        except Exception:
+            return ""
+
+        sep_raw = inputs.get("separator", ", ")
+        sep = sep_raw if isinstance(sep_raw, str) else ", "
+
+        texts = []
+        for entry_id in ids:
+            entry = lib_entries.get(entry_id)
+            if not entry:
+                continue
+            t = entry.get("negative" if is_neg else "text", "") or ""
+            if t:
+                texts.append(t)
+        lib_text = sep.join(texts)
+
+        # Combine with passthrough (passthrough prefix comes first, matching load_prompt)
+        pt_key = "negative_passthrough" if is_neg else "positive_passthrough"
+        pt_raw = inputs.get(pt_key)
+        if isinstance(pt_raw, str) and pt_raw.strip():
+            pass_text = pt_raw.strip()
+        elif isinstance(pt_raw, list):
+            pass_text = _resolve_text_link(prompt, pt_raw, depth + 1)
+        else:
+            pass_text = ""
+
+        if pass_text and lib_text:
+            return pass_text + sep + lib_text
+        return pass_text or lib_text
+
+    if ctype == "FrogMerge":
+        sep_raw = inputs.get("separator", ", ")
+        sep = sep_raw if isinstance(sep_raw, str) else ", "
+        parts = []
+        for i in range(1, 11):
+            v = inputs.get(f"input_{i}")
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip():
+                parts.append(v.strip())
+            elif isinstance(v, list):
+                resolved = _resolve_text_link(prompt, v, depth + 1)
+                if resolved:
+                    parts.append(resolved)
+        return sep.join(parts) if parts else ""
 
     if ctype in _TEXT_ENCODE_TYPES:
         for key in ("text", "text_g", "text_l", "positive", "negative"):
@@ -726,6 +805,8 @@ def _save_frames(images, params_str, full_prefix, filename, counter, subfolder,
     extra_text: list[tuple[str, str]] = []
     if extra_pnginfo is not None:
         for k, v in extra_pnginfo.items():
+            if k == "frog_source_prompt":
+                continue  # internal key — never write into image metadata
             extra_text.append((k, json.dumps(v)))
 
     results = []
@@ -834,8 +915,9 @@ class RibbitySaveA1111:
                 "negative_text":   ("STRING", {"forceInput": True}),
             },
             "hidden": {
-                "prompt":       "PROMPT",
+                "prompt":        "PROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
+                "unique_id":     "UNIQUE_ID",
             },
         }
 
@@ -848,14 +930,49 @@ class RibbitySaveA1111:
     def save(self, images, filename_prefix, image_format,
              output_path="", show_preview=True,
              positive_text=None, negative_text=None,
-             prompt=None, extra_pnginfo=None):
+             prompt=None, extra_pnginfo=None, unique_id=None):
+
+        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
+        if images.shape[0] == 0:
+            return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
 
         # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
         if images.shape[0] == 0:
             return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
 
         filename_prefix = _expand_filename_tokens(filename_prefix or "RibbityPack")
-        meta = extract_workflow_metadata(prompt)
+        # When called from an Image Picker proceed run the executing prompt is
+        # minimal (KSampler stripped). The full original workflow is stashed in
+        # extra_pnginfo so metadata can still be extracted correctly.
+        source_prompt = prompt
+        if isinstance((extra_pnginfo or {}).get("frog_source_prompt"), dict):
+            source_prompt = extra_pnginfo["frog_source_prompt"]
+        meta = extract_workflow_metadata(source_prompt)
+
+        # Priority 1 (already set): runtime wire — positive_text/negative_text
+        #   delivered directly when FrogCLIPTextEncode is in the executing prompt.
+
+        # Priority 2: exact runtime text cached by FrogCLIPTextEncode on its last
+        #   execution (the capture run). Always more accurate than static tracing
+        #   because it reflects wildcard resolution, sorting, deduplication, etc.
+        if _CTE is not None:
+            if not positive_text:
+                positive_text = getattr(_CTE, "_last_positive", "") or None
+            if not negative_text:
+                negative_text = getattr(_CTE, "_last_negative", "") or None
+
+        # Priority 3: static trace through this node's own wired inputs in the
+        #   full workflow. Fallback for a cold start where _last_positive is unset.
+        if source_prompt and unique_id:
+            _my = (source_prompt.get(str(unique_id)) or {}).get("inputs") or {}
+            if not positive_text:
+                _lnk = _my.get("positive_text")
+                if isinstance(_lnk, list):
+                    positive_text = _resolve_text_link(source_prompt, _lnk) or None
+            if not negative_text:
+                _lnk = _my.get("negative_text")
+                if isinstance(_lnk, list):
+                    negative_text = _resolve_text_link(source_prompt, _lnk) or None
 
         model_label    = meta.get("model_label")
         model_resolved = resolve_model_path(model_label) if model_label else None
@@ -894,22 +1011,7 @@ class RibbitySaveA1111:
             custom, image_format, show_preview, prompt, extra_pnginfo
         )
 
-        # DEBUG — remove this block when done
-        debug_lines = [
-            "node=RibbitySaveA1111",
-            "model=" + str(model_name),
-            "seed=" + str(seed),
-            "steps=" + str(meta.get("steps")),
-            "cfg=" + str(meta.get("cfg")),
-            "sampler=" + str(meta.get("sampler_name")),
-            "scheduler=" + str(meta.get("scheduler")),
-            "loras=" + str([(n, s) for n, _, s in loras]),
-            "format=" + image_format,
-        ]
-        debug = "\n".join(debug_lines)
-        # END DEBUG
-
-        return {"ui": {"images": results}, "result": (int(seed) if seed is not None else 0, debug)}
+        return {"ui": {"images": results}, "result": (int(seed) if seed is not None else 0, "")}
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +1048,7 @@ class RibbitySaveHashEmbed:
             "hidden": {
                 "prompt":        "PROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
+                "unique_id":     "UNIQUE_ID",
             },
         }
 
@@ -958,14 +1061,49 @@ class RibbitySaveHashEmbed:
     def save(self, images, filename_prefix, image_format,
              output_path="", show_preview=True, append_counter=True,
              positive_text=None, negative_text=None,
-             prompt=None, extra_pnginfo=None):
+             prompt=None, extra_pnginfo=None, unique_id=None):
+
+        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
+        if images.shape[0] == 0:
+            return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
 
         # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
         if images.shape[0] == 0:
             return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
 
         filename_prefix = _expand_filename_tokens(filename_prefix or "RibbityPack")
-        meta = extract_workflow_metadata(prompt)
+        # When called from an Image Picker proceed run the executing prompt is
+        # minimal (KSampler stripped). The full original workflow is stashed in
+        # extra_pnginfo so metadata can still be extracted correctly.
+        source_prompt = prompt
+        if isinstance((extra_pnginfo or {}).get("frog_source_prompt"), dict):
+            source_prompt = extra_pnginfo["frog_source_prompt"]
+        meta = extract_workflow_metadata(source_prompt)
+
+        # Priority 1 (already set): runtime wire — positive_text/negative_text
+        #   delivered directly when FrogCLIPTextEncode is in the executing prompt.
+
+        # Priority 2: exact runtime text cached by FrogCLIPTextEncode on its last
+        #   execution (the capture run). Always more accurate than static tracing
+        #   because it reflects wildcard resolution, sorting, deduplication, etc.
+        if _CTE is not None:
+            if not positive_text:
+                positive_text = getattr(_CTE, "_last_positive", "") or None
+            if not negative_text:
+                negative_text = getattr(_CTE, "_last_negative", "") or None
+
+        # Priority 3: static trace through this node's own wired inputs in the
+        #   full workflow. Fallback for a cold start where _last_positive is unset.
+        if source_prompt and unique_id:
+            _my = (source_prompt.get(str(unique_id)) or {}).get("inputs") or {}
+            if not positive_text:
+                _lnk = _my.get("positive_text")
+                if isinstance(_lnk, list):
+                    positive_text = _resolve_text_link(source_prompt, _lnk) or None
+            if not negative_text:
+                _lnk = _my.get("negative_text")
+                if isinstance(_lnk, list):
+                    negative_text = _resolve_text_link(source_prompt, _lnk) or None
 
         model_label    = meta.get("model_label")
         model_resolved = resolve_model_path(model_label) if model_label else None
@@ -1011,23 +1149,7 @@ class RibbitySaveHashEmbed:
             append_counter=append_counter
         )
 
-        # DEBUG — remove this block when done
-        debug_lines = [
-            "node=RibbitySaveHashEmbed",
-            "model=" + str(model_name),
-            "model_sha=" + str(model_sha[:10] if model_sha else None),
-            "seed=" + str(seed),
-            "steps=" + str(meta.get("steps")),
-            "cfg=" + str(meta.get("cfg")),
-            "sampler=" + str(meta.get("sampler_name")),
-            "scheduler=" + str(meta.get("scheduler")),
-            "loras=" + str([(n, s[:10] if s else None, st) for n, s, st in loras]),
-            "format=" + image_format,
-        ]
-        debug = "\n".join(debug_lines)
-        # END DEBUG
-
-        return {"ui": {"images": results}, "result": (int(seed) if seed is not None else 0, debug)}
+        return {"ui": {"images": results}, "result": (int(seed) if seed is not None else 0, "")}
 
 
 # ---------------------------------------------------------------------------

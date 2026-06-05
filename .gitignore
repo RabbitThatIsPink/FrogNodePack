@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# FrogNodePack — user data (not for version control)
+data/
+wildcards/
+Autocomplete Optimization Patch - Custom Scripts/
