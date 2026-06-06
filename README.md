@@ -27,10 +27,6 @@ Made by [RabbitThatIsPink](https://github.com/RabbitThatIsPink)
 
 ---
 
-> **Workflow Note:** The included baseline workflow is configured for use with the [Anima Turbo LoRA](https://civitai.com/models/2560840/anima-turbo-lora). It includes a LoRA Loader node and a KSampler tuned to its recommended settings. You will need to download that LoRA separately before the workflow runs as intended.
-
----
-
 ## Installation
 
 1. Copy the `FrogNodePack` folder into your ComfyUI `custom_nodes` directory.
@@ -45,13 +41,41 @@ Made by [RabbitThatIsPink](https://github.com/RabbitThatIsPink)
 
 ---
 
-## Example Workflow
+## Example Workflows
 
-A ready-to-use baseline workflow is included in this repo: [`FrogFlow - Export Edition.json`](FrogFlow%20-%20Export%20Edition.json)
+---
+
+### FrogFlow — Export Edition
+
+A ready-to-use baseline workflow included in this repo: [`FrogFlow - Export Edition.json`](FrogFlow%20-%20Export%20Edition.json)
 
 Load it in ComfyUI via **Load** → select the `.json` file. It demonstrates the standard node layout using the full Frog Node Pack — loader, CLIP encode, sampler, and save all wired together.
 
-![Frog Workflow](Frog_Workflow.png)
+> **Note:** This workflow is configured for the [Anima Turbo LoRA](https://civitai.com/models/2560840/anima-turbo-lora). You will need to download that LoRA separately before it runs as intended.
+
+![FrogFlow Export Edition](Frog_Workflow.png)
+
+---
+
+### Basic Starter Workflow
+
+A beginner-friendly workflow included in this repo: [`Basic Starter Workflow.json`](Basic%20Starter%20Workflow.json)
+
+Contains **three independent flows** laid out side by side — delete the ones you don't need, or use them as a reference for building your own setup.
+
+| Flow | Model Target | Notes |
+|------|-------------|-------|
+| **Basic Anima** | Anima (non-Turbo) | Standard quality settings, no LoRA required |
+| **Anima Turbo** | Anima + Turbo LoRA | Faster generation; Turbo LoRA may affect clothing LoRAs |
+| **SDXL** | Illustrious / NoobAI / Pony | Uses standard SDXL resolution and sampler settings |
+
+**First-time setup:**
+1. Load the file in ComfyUI via **Load** → select the `.json`
+2. Run a test generation to confirm your models are wired correctly
+3. Un-bypass the Save node (`Select node → Ctrl+B`) when you're ready to save output
+4. Set your **filename prefix** and **output path** in the Save node
+
+![Basic Starter Workflow](BasicStarterWorkflow.png)
 
 ---
 
