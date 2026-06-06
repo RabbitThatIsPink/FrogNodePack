@@ -1880,10 +1880,11 @@ function _openPromptModalInner({ existing, onSave, onDelete, nameExists }) {
   children.push(status, actions);
   modal.append(...children);
 
-  // Initial position: cascade modals so stacked windows don't overlap exactly.
+  // Initial position: centre horizontally, cascade so stacked modals don't overlap.
   const offset = (_modalStack++ % 6) * 24;
-  modal.style.left = `calc(50% - 270px + ${offset}px)`;
-  modal.style.top = `calc(15% + ${offset}px)`;
+  modal.style.left = `50%`;
+  modal.style.top  = `calc(10% + ${offset}px)`;
+  modal.style.transform = `translateX(calc(-50% + ${offset}px))`;
   document.body.appendChild(modal);
 
   dragCleanup = makeDraggable(modal, header);
@@ -1897,6 +1898,10 @@ function makeDraggable(panel, handle) {
   const onDown = (e) => {
     if (e.button !== 0 || e.target.closest("button, input, textarea, select")) return;
     const rect = panel.getBoundingClientRect();
+    // Clear the centering transform before switching to pixel coords —
+    // getBoundingClientRect() already reflects the post-transform position,
+    // so the visual location is preserved but the transform won't fight drags.
+    panel.style.transform = "";
     panel.style.left = rect.left + "px";
     panel.style.top = rect.top + "px";
     panelX = rect.left;

@@ -31,14 +31,19 @@ const CSS = `
   gap: 6px;
   flex-shrink: 0;
   flex-wrap: wrap;
+  justify-content: center;
 }
 .fip-btn {
+  flex: 1;
+  min-width: 75px;
+  max-width: 180px;
   padding: 5px 12px;
   border-radius: 4px;
   border: none;
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
+  text-align: center;
   transition: background 80ms;
 }
 .fip-btn:disabled { opacity: 0.35; cursor: not-allowed; }
@@ -218,12 +223,17 @@ function buildWidget(node) {
     sel.clear();
     total = images.length;
 
+    // Cache-bust so the browser always fetches the current files rather than
+    // serving a stale cached version from the previous job (filenames repeat
+    // across runs: frame_0000.png, frame_0001.png, …).
+    const bust = Date.now();
+
     images.forEach((img, idx) => {
       const tile = document.createElement("div");
       tile.className = "fip-tile";
 
       const im  = document.createElement("img");
-      im.src      = api.apiURL(`/view?filename=${enc(img.filename)}&subfolder=${enc(img.subfolder)}&type=${enc(img.type)}`);
+      im.src      = api.apiURL(`/view?filename=${enc(img.filename)}&subfolder=${enc(img.subfolder)}&type=${enc(img.type)}&t=${bust}`);
       im.alt      = `#${idx + 1}`;
       im.draggable = false;
 
@@ -254,33 +264,23 @@ function buildWidget(node) {
   };
 
   // ── Proceed ──
+  // Simply POST the selection — the Python execution thread is blocking on a
+  // sleep loop waiting for this. No second prompt submission is needed.
   proceedBtn.onclick = async () => {
     if (!sel.size) return;
     proceedBtn.disabled    = true;
     proceedBtn.textContent = "…";
-    status.textContent     = "Queuing…";
+    status.textContent     = "Processing…";
     try {
-      const graph    = await app.graphToPrompt().catch(() => null);
-      const prompt   = graph?.output   ?? null;
-      const workflow = graph?.workflow  ?? null;
       const r = await fetch("/frog_picker/proceed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           node_id:   String(node.id),
           selection: [...sel].sort((a, b) => a - b),
-          prompt,
-          workflow,
-          client_id: api.clientId ?? "",
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
-      if (!j.queued) {
-        // Server-side queue unavailable — fall back to full workflow
-        console.warn("[🐸 Image Picker] server queue failed, falling back to app.queuePrompt");
-        await app.queuePrompt(0, 1);
-      }
       reset();
     } catch (e) {
       console.error("[🐸 Image Picker] proceed:", e);
@@ -302,13 +302,9 @@ function buildWidget(node) {
     reset();
   };
 
-  // ── helpers ──
-  const holdQueueOn = () =>
-    node.widgets?.find(w => w.name === "hold_queue")?.value === true;
-
   // ── Listen for WS events ──
 
-  // C: explicit clear sent by Python before each new capture (auto_replace ON)
+  // C: explicit clear sent by Python before each new capture
   const onClear = ({ detail }) => {
     if (String(detail?.node_id) !== String(node.id)) return;
     reset();
@@ -319,9 +315,9 @@ function buildWidget(node) {
     populate(detail.images);
   };
 
-  // B: new job started — only reset if hold_queue is OFF
+  // New job started — reset the grid so stale thumbnails don't linger
   const onExecStart = () => {
-    if (total > 0 && !holdQueueOn()) {
+    if (total > 0) {
       reset();
       status.textContent = "Generating…";
     }

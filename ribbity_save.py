@@ -932,47 +932,35 @@ class RibbitySaveA1111:
              positive_text=None, negative_text=None,
              prompt=None, extra_pnginfo=None, unique_id=None):
 
-        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
-        if images.shape[0] == 0:
-            return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
-
-        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
+        # Empty batch — skip gracefully.
         if images.shape[0] == 0:
             return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
 
         filename_prefix = _expand_filename_tokens(filename_prefix or "RibbityPack")
-        # When called from an Image Picker proceed run the executing prompt is
-        # minimal (KSampler stripped). The full original workflow is stashed in
-        # extra_pnginfo so metadata can still be extracted correctly.
-        source_prompt = prompt
-        if isinstance((extra_pnginfo or {}).get("frog_source_prompt"), dict):
-            source_prompt = extra_pnginfo["frog_source_prompt"]
-        meta = extract_workflow_metadata(source_prompt)
+        meta = extract_workflow_metadata(prompt)
 
-        # Priority 1 (already set): runtime wire — positive_text/negative_text
-        #   delivered directly when FrogCLIPTextEncode is in the executing prompt.
-
-        # Priority 2: exact runtime text cached by FrogCLIPTextEncode on its last
-        #   execution (the capture run). Always more accurate than static tracing
-        #   because it reflects wildcard resolution, sorting, deduplication, etc.
+        # Priority 1: runtime wire — positive_text/negative_text delivered
+        #   directly from FrogCLIPTextEncode via the graph connection.
+        # Priority 2: exact runtime text cached by FrogCLIPTextEncode.
+        #   Accurate fallback when the wire isn't present.
         if _CTE is not None:
             if not positive_text:
                 positive_text = getattr(_CTE, "_last_positive", "") or None
             if not negative_text:
                 negative_text = getattr(_CTE, "_last_negative", "") or None
 
-        # Priority 3: static trace through this node's own wired inputs in the
-        #   full workflow. Fallback for a cold start where _last_positive is unset.
-        if source_prompt and unique_id:
-            _my = (source_prompt.get(str(unique_id)) or {}).get("inputs") or {}
+        # Priority 3: static trace through the workflow graph.
+        #   Fallback for a cold start where _last_positive is unset.
+        if prompt and unique_id:
+            _my = (prompt.get(str(unique_id)) or {}).get("inputs") or {}
             if not positive_text:
                 _lnk = _my.get("positive_text")
                 if isinstance(_lnk, list):
-                    positive_text = _resolve_text_link(source_prompt, _lnk) or None
+                    positive_text = _resolve_text_link(prompt, _lnk) or None
             if not negative_text:
                 _lnk = _my.get("negative_text")
                 if isinstance(_lnk, list):
-                    negative_text = _resolve_text_link(source_prompt, _lnk) or None
+                    negative_text = _resolve_text_link(prompt, _lnk) or None
 
         model_label    = meta.get("model_label")
         model_resolved = resolve_model_path(model_label) if model_label else None
@@ -1063,47 +1051,35 @@ class RibbitySaveHashEmbed:
              positive_text=None, negative_text=None,
              prompt=None, extra_pnginfo=None, unique_id=None):
 
-        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
-        if images.shape[0] == 0:
-            return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
-
-        # Empty batch (e.g. from Image Picker on capture run) — skip gracefully.
+        # Empty batch — skip gracefully.
         if images.shape[0] == 0:
             return {"ui": {"images": []}, "result": (0, "skipped — empty batch")}
 
         filename_prefix = _expand_filename_tokens(filename_prefix or "RibbityPack")
-        # When called from an Image Picker proceed run the executing prompt is
-        # minimal (KSampler stripped). The full original workflow is stashed in
-        # extra_pnginfo so metadata can still be extracted correctly.
-        source_prompt = prompt
-        if isinstance((extra_pnginfo or {}).get("frog_source_prompt"), dict):
-            source_prompt = extra_pnginfo["frog_source_prompt"]
-        meta = extract_workflow_metadata(source_prompt)
+        meta = extract_workflow_metadata(prompt)
 
-        # Priority 1 (already set): runtime wire — positive_text/negative_text
-        #   delivered directly when FrogCLIPTextEncode is in the executing prompt.
-
-        # Priority 2: exact runtime text cached by FrogCLIPTextEncode on its last
-        #   execution (the capture run). Always more accurate than static tracing
-        #   because it reflects wildcard resolution, sorting, deduplication, etc.
+        # Priority 1: runtime wire — positive_text/negative_text delivered
+        #   directly from FrogCLIPTextEncode via the graph connection.
+        # Priority 2: exact runtime text cached by FrogCLIPTextEncode.
+        #   Accurate fallback when the wire isn't present.
         if _CTE is not None:
             if not positive_text:
                 positive_text = getattr(_CTE, "_last_positive", "") or None
             if not negative_text:
                 negative_text = getattr(_CTE, "_last_negative", "") or None
 
-        # Priority 3: static trace through this node's own wired inputs in the
-        #   full workflow. Fallback for a cold start where _last_positive is unset.
-        if source_prompt and unique_id:
-            _my = (source_prompt.get(str(unique_id)) or {}).get("inputs") or {}
+        # Priority 3: static trace through the workflow graph.
+        #   Fallback for a cold start where _last_positive is unset.
+        if prompt and unique_id:
+            _my = (prompt.get(str(unique_id)) or {}).get("inputs") or {}
             if not positive_text:
                 _lnk = _my.get("positive_text")
                 if isinstance(_lnk, list):
-                    positive_text = _resolve_text_link(source_prompt, _lnk) or None
+                    positive_text = _resolve_text_link(prompt, _lnk) or None
             if not negative_text:
                 _lnk = _my.get("negative_text")
                 if isinstance(_lnk, list):
-                    negative_text = _resolve_text_link(source_prompt, _lnk) or None
+                    negative_text = _resolve_text_link(prompt, _lnk) or None
 
         model_label    = meta.get("model_label")
         model_resolved = resolve_model_path(model_label) if model_label else None
