@@ -160,6 +160,28 @@ Samples your latent and decodes it to an image in one node — no separate VAE D
 
 ---
 
+### 🐸 Prompt Processor
+
+Replaces the four-node chain of 🐸 Merge → 🐸 Wildcard Resolver → 🐸 Sorter → 🐸 Dedupe in a single node. Wire up to six string inputs, set a seed, and get a fully merged, wildcard-resolved, sorted, and deduplicated prompt in one step.
+
+Toggle-gated inputs (raffle, scene, tagger) are only included when their corresponding flag is on in the wired **🐸 Toggle Pack**. If no Toggle Pack is wired, those three inputs are excluded automatically.
+
+| Input | Always included? |
+|-------|-----------------|
+| library | ✓ Always |
+| extra_1 | ✓ Always |
+| extra_2 | ✓ Always |
+| raffle | Toggle Pack gate |
+| scene | Toggle Pack gate |
+| tagger | Toggle Pack gate |
+
+| Output | Description |
+|--------|-------------|
+| prompt | Merged, resolved, sorted, and deduped prompt string |
+| debug | Log showing wildcard resolutions and tag category assignments |
+
+---
+
 ### 🐸 Image Picker
 
 Sits between the KSampler and a Save node. Instead of saving everything the sampler generates, run the batch first, review the results as thumbnails directly on the canvas, select what you want, then click **Proceed** — only the selected frames continue down the line.
@@ -204,35 +226,6 @@ Identical to **🐸 Save: Hash Embed** but without SHA256 hashing — saves are 
 
 ---
 
-### 🐸 Dedupe
-
-Removes duplicate tags from a comma-separated prompt string. Comparison is case-insensitive and treats underscores and spaces as the same (`Blue_Eyes` == `blue eyes`). The first occurrence of each tag is kept; order is otherwise preserved. Handles parenthesised weights like `(tag:1.2)` without breaking them.
-
-Wire a STRING in, get a cleaned STRING out.
-
----
-
-### 🐸 Merge
-
-Joins up to 10 string inputs into one, separated by a configurable separator (default `, `). Inputs are dynamic — connect the first slot and a second one appears automatically, and so on. Empty or disconnected inputs are silently skipped.
-
-| Input | Description |
-|-------|-------------|
-| separator | Text placed between each joined value |
-| input_1 … input_10 | String inputs (connect as many as you need) |
-
----
-
-### 🐸 Sorter
-
-Takes a comma-separated tag string and reorders it into the category order that Anima-trained models tend to respond best to:
-
-> **Quality → Subject → Character → Series → Artist / Style → General**
-
-Also deduplicates tags during the sort. The `debug` output shows exactly which bucket each tag was routed into, useful for checking that unusual tags landed in the right place.
-
----
-
 ### 🐸 Toggle Pack
 
 Bundles four source-selection toggles — **Tagger**, **Raffle**, **Florence2**, and **Scene** — into a single `ANIMA_TOGGLES` wire. Connect it to **🐸 Prompt Merge** to gate which inputs are included in the final prompt.
@@ -263,42 +256,6 @@ Merges a base prompt string with up to four optional inputs, each gated by a tog
 A multiline text input that understands wildcard notation. Write your prompt using `__wildcard_name__` file references or `{option_a|option_b}` inline choices. The text passes through as-is — pair it with **🐸 Wildcard Resolver** to actually expand the wildcards at queue time.
 
 Typing `__` in the box triggers a dropdown of matching wildcard file names from your wildcards folder.
-
----
-
-### 🐸 Wildcard Resolver
-
-Expands wildcards in a wired string and resolves conflicts between opposite terms.
-
-- **`__filename__`** — picks a random line from a `.txt` file in your wildcards folder
-- **`{a|b|c}`** — picks one option at random
-- **Seed** — fixed seed for reproducible picks; `0` = random each run
-- **Deconflict opposites** — if wildcards resolve to contradictory terms (e.g. both `left` and `right`, or `happy` and `sad`), the resolver swaps duplicates automatically
-- **Auto-detect pairs** — learns opposite pairs from the `{a|b}` groups in your wildcards, in addition to the built-in list
-
-Wildcards folder is found automatically next to the pack, next to `main.py`, or in the standard ComfyUI install location.
-
----
-
-### 🐸 Prompt Processor
-
-Replaces the four-node chain of 🐸 Merge → 🐸 Wildcard Resolver → 🐸 Sorter → 🐸 Dedupe in a single node. Wire up to six string inputs, set a seed, and get a fully merged, wildcard-resolved, sorted, and deduplicated prompt in one step.
-
-Toggle-gated inputs (raffle, scene, tagger) are only included when their corresponding flag is on in the wired **🐸 Toggle Pack**. If no Toggle Pack is wired, those three inputs are excluded automatically.
-
-| Input | Always included? |
-|-------|-----------------|
-| library | ✓ Always |
-| extra_1 | ✓ Always |
-| extra_2 | ✓ Always |
-| raffle | Toggle Pack gate |
-| scene | Toggle Pack gate |
-| tagger | Toggle Pack gate |
-
-| Output | Description |
-|--------|-------------|
-| prompt | Merged, resolved, sorted, and deduped prompt string |
-| debug | Log showing wildcard resolutions and tag category assignments |
 
 ---
 
@@ -551,6 +508,17 @@ Both are created automatically on first run and are not touched by updates.
 1. In the old pack's gallery, use its Export function to save a `.zip`.
 2. Open the 🐸 Library node and click **Import**.
 3. Select the `.zip` — entries and thumbnails are imported in one step.
+
+---
+
+## Deprecated
+
+Superseded by 🐸 Prompt Processor. Still functional — existing workflows using these nodes will not break.
+
+- 🐸 Merge
+- 🐸 Wildcard Resolver
+- 🐸 Sorter
+- 🐸 Dedupe
 
 ---
 
