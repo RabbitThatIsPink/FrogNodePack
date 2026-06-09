@@ -437,20 +437,6 @@ Wire `positive` → 🐸 Library `positive_passthrough` and `negative` → 🐸 
 
 ---
 
-### 🐸 Checkpoint Library Selector
-
-Maps a diffusion model filename to a Library entry ID using a keyword ruleset. Wire `prompt_id` → 🐸 Library `prompt_id_input` to auto-switch the active gallery entry when the model changes.
-
-Rules format (one per line):
-```
-# keyword1, keyword2 : library_entry_id
-anima, ribbity : my_anima_entry
-pony, pdxl     : pony_entry
-```
-First matching rule wins. Matching is case-insensitive substring of the model stem. Lines starting with `#` are comments.
-
----
-
 ### 🐸 Tag Filter
 
 Combines a Florence2 natural-language caption and a WD14 tag string, strips unwanted content, and outputs a clean merged prompt. Both inputs are optional — wire whichever taggers you use.
@@ -575,6 +561,7 @@ Both are created automatically on first run and are not touched by updates.
 - 🐸 Florence2+SAM Masker
 - 🐸 SAM Loader
 - 🐸 Mask Batch Split
+- 🐸 Checkpoint Library Selector
 
 ---
 
