@@ -29,7 +29,6 @@ class RibbityKSampler:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model":        ("MODEL",),
                 "seed":         ("INT", {
                     "default": 0,
                     "min": 0,
@@ -39,15 +38,22 @@ class RibbityKSampler:
                 "cfg":          ("FLOAT", {"default": 4.0, "min": 0.0, "max": 100.0, "step": 0.1}),
                 "sampler_name": (_SAMPLERS,),
                 "scheduler":    (_SCHEDULERS,),
-                "positive":     ("CONDITIONING",),
-                "negative":     ("CONDITIONING",),
-                "vae":          ("VAE",),
                 "latent_image": ("LATENT",),
                 "denoise":      ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "tile_size":    ("INT",   {"default": 512, "min": 256, "max": 2048, "step": 64,
                                            "tooltip": "Tile size for tiled VAE decode only."}),
                 "Tiled":        ("BOOLEAN", {"default": False}),
-            }
+            },
+            "optional": {
+                "basic_pipe": ("BASIC_PIPE", {
+                    "tooltip": "When connected, overrides model/positive/negative/vae inputs. "
+                               "Compatible with Impact Pack's ToBasicPipe / 🐸 Pipe In.",
+                }),
+                "model":    ("MODEL",),
+                "positive": ("CONDITIONING",),
+                "negative": ("CONDITIONING",),
+                "vae":      ("VAE",),
+            },
         }
 
     RETURN_TYPES  = ("LATENT", "IMAGE", "STRING")
@@ -55,8 +61,19 @@ class RibbityKSampler:
     FUNCTION      = "sample"
     CATEGORY      = "🐸 Node Pack"
 
-    def sample(self, model, seed, steps, cfg, sampler_name, scheduler,
-               positive, negative, vae, latent_image, denoise, tile_size, Tiled):
+    def sample(self, seed, steps, cfg, sampler_name, scheduler,
+               latent_image, denoise, tile_size, Tiled,
+               basic_pipe=None, model=None, positive=None, negative=None, vae=None):
+
+        # Pipe overrides individual inputs when connected
+        if basic_pipe is not None:
+            model, _clip, vae, positive, negative = basic_pipe
+
+        if model is None or vae is None or positive is None or negative is None:
+            raise ValueError(
+                "[🐸 KSampler] Connect either basic_pipe or individual "
+                "model / vae / positive / negative inputs."
+            )
 
         if scheduler == "beta57":
             latent_out = self._sample_beta57(

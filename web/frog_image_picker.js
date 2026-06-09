@@ -135,6 +135,27 @@ const CSS = `
   line-height: 1.5;
 }
 .fip-empty strong { color: #666; display: block; margin-bottom: 4px; }
+
+/* size slider row */
+.fip-size-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #888;
+}
+.fip-size-row label { white-space: nowrap; }
+.fip-size-slider {
+  flex: 1;
+  accent-color: #4aaa7a;
+  cursor: pointer;
+}
+.fip-size-val {
+  min-width: 32px;
+  text-align: right;
+  color: #aaa;
+}
 `;
 
 let _cssAdded = false;
@@ -164,6 +185,27 @@ function buildWidget(node) {
   [proceedBtn, cancelBtn, selAllBtn].forEach(b => b.disabled = true);
   btns.append(proceedBtn, cancelBtn, selAllBtn);
 
+  // ── size slider ──
+  const LS_KEY = "frog_picker_tile_size";
+  const TILE_MIN = 60, TILE_MAX = 320, TILE_DEFAULT = 150;
+  let tileSize = parseInt(localStorage.getItem(LS_KEY) ?? TILE_DEFAULT, 10);
+  if (isNaN(tileSize) || tileSize < TILE_MIN || tileSize > TILE_MAX) tileSize = TILE_DEFAULT;
+
+  const sizeRow = document.createElement("div");
+  sizeRow.className = "fip-size-row";
+
+  const sizeLabel = el("label", null, "Tile size:");
+  const sizeSlider = document.createElement("input");
+  sizeSlider.type  = "range";
+  sizeSlider.className = "fip-size-slider";
+  sizeSlider.min   = TILE_MIN;
+  sizeSlider.max   = TILE_MAX;
+  sizeSlider.step  = 10;
+  sizeSlider.value = tileSize;
+
+  const sizeVal = el("div", "fip-size-val", `${tileSize}px`);
+  sizeRow.append(sizeLabel, sizeSlider, sizeVal);
+
   const status = document.createElement("div");
   status.className = "fip-status";
   status.textContent = "Run the workflow to generate images.";
@@ -176,19 +218,27 @@ function buildWidget(node) {
   empty.innerHTML = "<strong>No images yet</strong>Queue a workflow to capture a batch.";
   grid.appendChild(empty);
 
-  wrap.append(btns, status, grid);
+  wrap.append(btns, sizeRow, status, grid);
 
-  // ── column layout: 2–10 columns, each at most 150 px ──
-  const GAP = 6, TILE = 150, MIN_COLS = 2, MAX_COLS = 10;
+  // ── column layout: 2–10 columns, width driven by tileSize slider ──
+  const GAP = 6, MIN_COLS = 2, MAX_COLS = 10;
   function setColumns() {
     const w = grid.clientWidth;
     if (w === 0) return;
-    const cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor((w + GAP) / (TILE + GAP))));
+    const cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor((w + GAP) / (tileSize + GAP))));
     const colW = Math.floor((w - (cols - 1) * GAP) / cols);
     grid.style.gridTemplateColumns = `repeat(${cols}, ${colW}px)`;
   }
   const _ro = new ResizeObserver(setColumns);
   _ro.observe(grid);
+
+  // ── slider wiring ──
+  sizeSlider.addEventListener("input", () => {
+    tileSize = parseInt(sizeSlider.value, 10);
+    sizeVal.textContent = `${tileSize}px`;
+    localStorage.setItem(LS_KEY, tileSize);
+    setColumns();
+  });
 
   // ── state ──
   const sel = new Set();

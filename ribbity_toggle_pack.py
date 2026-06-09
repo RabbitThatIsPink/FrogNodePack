@@ -21,7 +21,7 @@ class RibbityTogglePack:
     RETURN_TYPES  = ("ANIMA_TOGGLES",)
     RETURN_NAMES  = ("toggle_pack",)
     FUNCTION      = "pack"
-    CATEGORY      = "🐸 Node Pack"
+    CATEGORY      = "🐸 Node Pack/Utility"
 
     def pack(self, tagger, raffle, florence2, scene):
         return ({

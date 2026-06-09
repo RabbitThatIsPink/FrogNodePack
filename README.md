@@ -280,6 +280,28 @@ Wildcards folder is found automatically next to the pack, next to `main.py`, or 
 
 ---
 
+### 🐸 Prompt Processor
+
+Replaces the four-node chain of 🐸 Merge → 🐸 Wildcard Resolver → 🐸 Sorter → 🐸 Dedupe in a single node. Wire up to six string inputs, set a seed, and get a fully merged, wildcard-resolved, sorted, and deduplicated prompt in one step.
+
+Toggle-gated inputs (raffle, scene, tagger) are only included when their corresponding flag is on in the wired **🐸 Toggle Pack**. If no Toggle Pack is wired, those three inputs are excluded automatically.
+
+| Input | Always included? |
+|-------|-----------------|
+| library | ✓ Always |
+| extra_1 | ✓ Always |
+| extra_2 | ✓ Always |
+| raffle | Toggle Pack gate |
+| scene | Toggle Pack gate |
+| tagger | Toggle Pack gate |
+
+| Output | Description |
+|--------|-------------|
+| prompt | Merged, resolved, sorted, and deduped prompt string |
+| debug | Log showing wildcard resolutions and tag category assignments |
+
+---
+
 ### 🐸 Log Reader
 
 Reads your ComfyUI log file and outputs the tail of it as a string. Wire it into a *Show Text* node to check logs without leaving the canvas.
@@ -339,6 +361,39 @@ The image passes through unchanged, so this node can sit anywhere in your chain.
 
 ---
 
+## Adding Library Entries
+
+The Library stores named prompts with thumbnails, tags, and optional LoRAs. Here's how to add one:
+
+1. **Drop a 🐸 Library node** into your workflow and open it.
+2. **Click the `+` button** in the top-right of the gallery to open the entry editor.
+3. **Fill in the fields:**
+   - **Name** — what you'll see on the tile (required)
+   - **Positive** — the prompt text for this entry
+   - **Negative** — optional negative prompt
+   - **Tags** — comma-separated, supports `category:value` format (e.g. `style:cyberpunk`)
+4. **Add LoRAs** (optional) — click **Add LoRA**, pick a file from the dropdown, and set the strength. These are applied automatically whenever the entry is selected.
+5. **Save** — click the save button. The tile appears in the gallery immediately.
+
+To select an entry during generation, just click its tile. Click again to deselect.
+
+---
+
+### Adding a thumbnail using 🐸 Thumbnail Saver
+
+1. Right-click the canvas → search for **🐸 Thumbnail Saver** and add it.
+2. Wire your image source (e.g. KSampler `Image` output) into the **image** input.
+
+**Saving the thumbnail:**
+
+3. In the **🐸 Library** node, click the tile of the entry you want to add a thumbnail to. This automatically writes that entry's ID into the Thumbnail Saver's `prompt_id` field — you don't need to type anything.
+4. Queue the workflow. The generated image is saved as that entry's thumbnail instantly.
+5. The tile in the gallery updates with the new image on the next refresh.
+
+> **Tip:** The Thumbnail Saver passes the image through unchanged, so it can sit anywhere in your chain without interrupting the rest of the workflow.
+
+---
+
 ### 🐸 Save + Thumbnail
 
 Creates or updates a library entry **and** saves its thumbnail in a single queue step. Useful for building your library as you generate — run the queue once and the entry lands in the gallery complete with artwork.
@@ -352,6 +407,137 @@ Creates or updates a library entry **and** saves its thumbnail in a single queue
 | overwrite_by_name | When on, updates an existing entry with this name instead of creating a new one |
 | negative | Optional negative prompt |
 | prompt_id | Optional — pins the entry to a specific ID; leave blank to generate from the name |
+
+---
+
+## Utility
+
+---
+
+### 🐸 Load: Model + CLIP + VAE + Name
+
+Identical to 🐸 Load: Model + CLIP + VAE with one addition: a `model_name` STRING output containing the diffusion model's filename stem (e.g. `ANIMA_beta57_v3` from `ANIMA_beta57_v3.safetensors`). Wire it into 🐸 Load Library by Name to automatically load the matching quality-prompt entry on every queue run.
+
+---
+
+### 🐸 Load Library by Name
+
+Finds the Library entry whose name matches an incoming `model_name` string, applies its LoRAs to the connected MODEL and CLIP, and outputs the entry's positive and negative text combined with optional passthrough inputs.
+
+Matching tries exact name first, then substring. If nothing matches, the passthrough inputs are returned unchanged and a warning is printed to the console.
+
+Wire `positive` → 🐸 Library `positive_passthrough` and `negative` → 🐸 Library `negative_passthrough` so character prompts stack on top of the quality base.
+
+| Output | Description |
+|--------|-------------|
+| MODEL | MODEL with library LoRAs applied |
+| CLIP | CLIP with library LoRAs applied |
+| positive | Library positive text combined with passthrough |
+| negative | Library negative text combined with passthrough |
+
+---
+
+### 🐸 Checkpoint Library Selector
+
+Maps a diffusion model filename to a Library entry ID using a keyword ruleset. Wire `prompt_id` → 🐸 Library `prompt_id_input` to auto-switch the active gallery entry when the model changes.
+
+Rules format (one per line):
+```
+# keyword1, keyword2 : library_entry_id
+anima, ribbity : my_anima_entry
+pony, pdxl     : pony_entry
+```
+First matching rule wins. Matching is case-insensitive substring of the model stem. Lines starting with `#` are comments.
+
+---
+
+### 🐸 Tag Filter
+
+Combines a Florence2 natural-language caption and a WD14 tag string, strips unwanted content, and outputs a clean merged prompt. Both inputs are optional — wire whichever taggers you use.
+
+Filtering is driven by a manual exclude list and an optional **🐸 Frog Exclude Toggle** wire. The natural-language stripper removes character-describing phrases from Florence2 sentences while leaving scene and environment content intact.
+
+**Filter categories (via 🐸 Frog Exclude Toggle):**
+- `character_traits` — hair colour/style, eye colour, skin tone, body descriptors
+- `expressions` — facial expression and emotion tags
+- `clothes` — clothing, footwear, legwear, accessories
+- `fantasy_traits` — animal ears, tails, horns, wings, etc.
+- `furry` — anthro / species-specific tags
+- `overlay_text` — Florence2 descriptions of visible text or signs
+
+---
+
+### 🐸 Frog Exclude Toggle
+
+Bundles filter-category switches into a single `TAG_FILTER_TOGGLES` wire for use with 🐸 Tag Filter. Lets you toggle character traits, expressions, clothing, fantasy features, furry tags, and overlay text on and off without rewiring.
+
+---
+
+### 🐸 Pipe In
+
+Packs MODEL, CLIP, VAE, positive conditioning, and negative conditioning into a single `BASIC_PIPE` wire. Reduces five connections to one when passing the full model stack between nodes.
+
+---
+
+### 🐸 Pipe Out
+
+Unpacks a `BASIC_PIPE` back into its five components: MODEL, CLIP, VAE, positive conditioning, and negative conditioning. Also passes the pipe through unchanged so it can continue downstream.
+
+---
+
+### 🐸 Pixel Upscaler
+
+Upscales an image using classic pixel-based interpolation. Supports **Nearest Neighbour**, **Bilinear**, and **Lanczos**. Scale factor is adjustable from 0.1× to 10×.
+
+---
+
+### 🐸 Duo Dupe Check
+
+Checks whether a character pair (name_a + name_b) already has a saved entry in the 🐸 Library. If a match is found in either order, the queue job is cancelled immediately — same mechanism as the Image Picker cancel. If no match is found, both names pass through unchanged.
+
+---
+
+## LLM Nodes
+
+These nodes require [Ollama](https://ollama.com) running locally.
+
+---
+
+### 🐸 Vocab Extender
+
+Permanently extends the 🐸 Tag Filter's built-in word lists. Type words or phrases — one per line or comma-separated — and they are saved to `data/vocab_extensions.json` and loaded immediately. No ComfyUI restart required. Additions persist across sessions automatically.
+
+Entries are assigned to a category that mirrors the Filter Toggle Pack toggles: **Always** (unconditional), **Fantasy**, **Character Traits**, or **Overlay Text**.
+
+---
+
+### 🐸 Tag to Description (Ollama)
+
+Takes a tag-based prompt and uses an Ollama model to produce a natural-language character appearance description. Designed for character builder workflows — extracts visual traits and outputs structured text suitable for feeding into a character library entry.
+
+Different from 🐸 LLM Prompt Refiner, which rewrites whole-scene prompts. This node focuses specifically on appearance extraction.
+
+---
+
+### 🐸 LLM Prompt Refiner (Ollama)
+
+Takes a tag-based or mixed prompt and rewrites it as fluent natural-language for an image generator. Strict no-hallucination rules are enforced — every word in the output must be traceable to an input tag. Handles named characters, colour tags, art style tags, and metadata cleanup automatically. A1111 weight notation is stripped before sending.
+
+---
+
+### 🐸 LLM Latent Selector
+
+Sends the image prompt to an Ollama model and asks it to pick the best canvas resolution from the preset list based on composition (portrait, landscape, cinematic, etc.). Outputs an empty LATENT at that resolution plus width and height integers. Falls back to a configurable default preset if Ollama is unreachable.
+
+Pair with **🐸 Smart Latent Switch** to use LLM resolution selection when available, with a manual fallback when it's not.
+
+---
+
+### 🐸 Smart Latent Switch
+
+Two LATENT inputs: a required primary and an optional override. If the override is connected it wins — otherwise the primary is used. No selector widget needed; the wiring is the switch.
+
+Intended use: wire 🐸 LLM Latent Selector into the override slot. Disconnect it to fall back to your manual 🐸 Empty Latent automatically.
 
 ---
 
@@ -379,6 +565,16 @@ Both are created automatically on first run and are not touched by updates.
 1. In the old pack's gallery, use its Export function to save a `.zip`.
 2. Open the 🐸 Library node and click **Import**.
 3. Select the `.zip` — entries and thumbnails are imported in one step.
+
+---
+
+## WIP — Unstable
+
+- 🐸 Detailer
+- 🐸 Detailer Pro
+- 🐸 Florence2+SAM Masker
+- 🐸 SAM Loader
+- 🐸 Mask Batch Split
 
 ---
 

@@ -36,14 +36,40 @@ function getNodesInGroup(keyword) {
     return result;
 }
 
-function applyBypass(keyword, enabled) {
-    const nodes = getNodesInGroup(keyword);
-    const mode  = enabled ? MODE_ACTIVE : MODE_BYPASS;
-    for (const node of nodes) {
-        if (node.mode !== mode) {
-            node.mode = mode;
-            node.setDirtyCanvas(true, true);
+// Follow the toggle_pack output wire(s) to downstream nodes, then find any node
+// connected to an input slot whose name matches `keyword`.
+function getConnectedInputNodes(togglePackNode, keyword) {
+    const graph = app.graph;
+    const result = [];
+    const outputLinks = togglePackNode.outputs?.[0]?.links || [];
+    for (const linkId of outputLinks) {
+        const link = graph.links[linkId];
+        if (!link) continue;
+        const downstream = graph.getNodeById(link.target_id);
+        if (!downstream) continue;
+        for (const inp of downstream.inputs || []) {
+            if (inp.name.toLowerCase() === keyword.toLowerCase() && inp.link != null) {
+                const srcLink = graph.links[inp.link];
+                if (!srcLink) continue;
+                const srcNode = graph.getNodeById(srcLink.origin_id);
+                if (srcNode) result.push(srcNode);
+            }
         }
+    }
+    return result;
+}
+
+function applyBypass(togglePackNode, keyword, enabled) {
+    const mode = enabled ? MODE_ACTIVE : MODE_BYPASS;
+
+    // Group-based bypass (original behaviour)
+    for (const node of getNodesInGroup(keyword)) {
+        if (node.mode !== mode) { node.mode = mode; node.setDirtyCanvas(true, true); }
+    }
+
+    // Connection-based bypass: whatever is wired to the matching input slot
+    for (const node of getConnectedInputNodes(togglePackNode, keyword)) {
+        if (node.mode !== mode) { node.mode = mode; node.setDirtyCanvas(true, true); }
     }
 }
 
@@ -54,7 +80,7 @@ function patchNode(node) {
     node.onWidgetChanged = function(name, value, oldValue, widget) {
         if (orig) orig.call(this, name, value, oldValue, widget);
         const keyword = TOGGLE_MAP[name];
-        if (keyword !== undefined) applyBypass(keyword, value);
+        if (keyword !== undefined) applyBypass(this, keyword, value);
     };
 }
 
@@ -70,7 +96,7 @@ app.registerExtension({
             patchNode(node);
             for (const widget of node.widgets || []) {
                 const keyword = TOGGLE_MAP[widget.name];
-                if (keyword !== undefined) applyBypass(keyword, widget.value);
+                if (keyword !== undefined) applyBypass(node, keyword, widget.value);
             }
         }
     },
