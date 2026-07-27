@@ -769,8 +769,24 @@ def _resolve_output_dir(filename_prefix: str, output_path: str, images):
         resolved = os.path.expanduser(custom)
         if not os.path.isabs(resolved):
             resolved = os.path.join(default_output, resolved)
-        os.makedirs(resolved, exist_ok=True)
-        output_dir = resolved
+        # Confine to ComfyUI's own output root. output_path is a plain
+        # workflow-widget string reachable via unauthenticated POST /prompt,
+        # so an absolute path or a "../" escape must be rejected rather than
+        # honored verbatim — otherwise a submitted workflow can create
+        # directories and write image files anywhere on disk.
+        real_default = os.path.realpath(default_output)
+        real_resolved = os.path.realpath(resolved)
+        try:
+            inside_root = os.path.commonpath([real_default, real_resolved]) == real_default
+        except ValueError:
+            inside_root = False  # different drive entirely on Windows
+        if not inside_root:
+            raise ValueError(
+                f"output_path '{output_path}' resolves outside the ComfyUI "
+                f"output directory ({default_output}) and was rejected."
+            )
+        os.makedirs(real_resolved, exist_ok=True)
+        output_dir = real_resolved
     else:
         output_dir = default_output
 
