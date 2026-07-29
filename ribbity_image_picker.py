@@ -57,7 +57,19 @@ def _temp_dir(node_id: str) -> Path:
         if folder_paths is not None
         else ROOT / "data" / "tmp"
     )
-    d = base / "frog_picker" / str(node_id)
+    picker_root = base / "frog_picker"
+    picker_root.mkdir(parents=True, exist_ok=True)
+
+    # node_id comes from the graph (UNIQUE_ID) or an untrusted POST body, so
+    # a crafted id containing "../" could otherwise walk this join out of
+    # picker_root -- confine it with realpath+commonpath the same way
+    # wildcard names and output_path are confined elsewhere in this pack.
+    root = os.path.realpath(picker_root)
+    candidate = os.path.realpath(os.path.join(root, str(node_id)))
+    if os.path.commonpath([root, candidate]) != root:
+        raise ValueError(f"invalid node_id: {node_id!r}")
+
+    d = Path(candidate)
     d.mkdir(parents=True, exist_ok=True)
     return d
 

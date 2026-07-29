@@ -81,9 +81,28 @@ _BUILTIN_OPPOSITES = [
 ]
 
 
+def _safe_wildcard_path(name: str, wildcards_dir: Path) -> Path | None:
+    """
+    Resolve `name` to a path inside wildcards_dir, or None if it would
+    escape that directory.
+
+    Pathlib silently discards the left operand of `/` when the right side
+    is absolute (e.g. `wildcards_dir / "/etc/passwd"` -> `/etc/passwd`), and
+    `..` components can walk out of the directory the same way a shell path
+    would -- so the candidate is checked with realpath+commonpath against
+    wildcards_dir rather than trusted as-is.
+    """
+    root = os.path.realpath(wildcards_dir)
+    candidate = os.path.realpath(os.path.join(str(wildcards_dir), name))
+    if os.path.commonpath([root, candidate]) != root:
+        return None
+    return Path(candidate)
+
+
 def _load_wildcard_file(name: str, wildcards_dir: Path) -> list[str] | None:
-    for path in [wildcards_dir / f"{name}.txt", wildcards_dir / name]:
-        if path.exists() and path.is_file():
+    for candidate_name in (f"{name}.txt", name):
+        path = _safe_wildcard_path(candidate_name, wildcards_dir)
+        if path is not None and path.exists() and path.is_file():
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     lines = [l.strip() for l in f.readlines()]
