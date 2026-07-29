@@ -16,7 +16,7 @@ import re
 import urllib.request
 import urllib.error
 
-_OLLAMA_URL = "http://192.168.0.194:11434/api/generate"
+_OLLAMA_URL = "http://localhost:11434/api/generate"
 
 # ---------------------------------------------------------------------------
 # System prompt — kept entirely separate from Tag to Description's prompt.

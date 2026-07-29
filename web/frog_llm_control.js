@@ -11,7 +11,7 @@
 
 import { app } from "../../scripts/app.js";
 
-const OLLAMA = "http://192.168.0.194:11434";
+const OLLAMA = "http://localhost:11434";
 
 // ── Ollama helpers ─────────────────────────────────────────────────────────
 
